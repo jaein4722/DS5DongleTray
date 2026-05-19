@@ -4,65 +4,46 @@ DS5DongleTray is a small Windows notification-area app for DS5Dongle. It reads t
 
 DS5DongleTray is intended to work with the [original DS5Dongle firmware](https://github.com/awalol/DS5Dongle) as long as the dongle exposes the existing host config reports used by the web config page.
 
+## Which Build Should I Use?
+
 Release builds are split into two flavors:
 
 - `original`: for the upstream/original firmware. This is the recommended build for most users.
 - `custom`: for my [custom firmware fork](https://github.com/jaein4722/DS5Dongle). This includes experimental tray-assisted firmware update support using the custom `0xF6 + 0x04` UF2 bootloader command.
 
-## Requirements
-
-- Windows 10 or newer
-- .NET 8 SDK to build from source
-
-## Build
-
-From this directory:
-
-```powershell
-dotnet restore
-dotnet build -c Release
-```
-
-Build the custom firmware flavor locally:
-
-```powershell
-dotnet build -c Release -p:DefineConstants=CUSTOM_FIRMWARE
-```
-
-The app binary will be under:
-
-```text
-src\DS5DongleTray\bin\Release\net8.0-windows10.0.17763.0\
-```
-
-## Release Build
-
-Tagged releases are built by GitHub Actions.
-
-- `DS5DongleTray-<tag>-original-win-x64.exe`
-- `DS5DongleTray-<tag>-original-win-x64.exe.sha256`
-- `DS5DongleTray-<tag>-custom-win-x64.exe`
-- `DS5DongleTray-<tag>-custom-win-x64.exe.sha256`
-
 Release executables are self-contained Windows x64 builds, so installing the .NET Desktop Runtime separately is not required.
 
-## Run
+## Download
 
-Start the tray app:
+Download one of these files from the latest GitHub Release:
 
-```powershell
-dotnet run --project .\src\DS5DongleTray\DS5DongleTray.csproj -c Release
-```
+- `DS5DongleTray-<tag>-original-win-x64.exe`
+- `DS5DongleTray-<tag>-custom-win-x64.exe`
 
-Run one diagnostic poll and exit:
+SHA256 checksum files are also attached:
 
-```powershell
-dotnet run --project .\src\DS5DongleTray\DS5DongleTray.csproj -c Release -- --once
-```
+- `DS5DongleTray-<tag>-original-win-x64.exe.sha256`
+- `DS5DongleTray-<tag>-custom-win-x64.exe.sha256`
 
-## Firmware Protocol
+## Usage
 
-The tray app talks to DS5Dongle through HID feature reports, using the same style as the web config page. Battery status is read from the normal `0x01` controller input report. See [docs/host-protocol.md](docs/host-protocol.md) for the report IDs and payloads.
+1. Run the downloaded `.exe`.
+2. If Windows SmartScreen appears, choose `More info`, then `Run anyway`.
+3. DS5DongleTray starts in the Windows notification area / system tray.
+4. If the icon is hidden, open the tray overflow arrow near the taskbar clock.
+5. Right-click the DS5DongleTray icon to open the menu.
+
+The tray menu shows battery, firmware version, and RSSI when the dongle is connected. It also provides:
+
+- `Refresh now`
+- `Settings...`
+- `Open Config Page`
+- `Open GitHub Repository`
+- `Exit`
+
+The `custom` build also adds:
+
+- `Update Firmware...`
 
 ## Settings Window
 
@@ -84,6 +65,44 @@ Settings are applied to RAM immediately with `0xF6 + 0x01`. Use `Save` to persis
 The `custom` release build adds `Update Firmware...` to the tray menu. It checks releases from `jaein4722/DS5Dongle`, can install a selected local `.uf2`, and can ask supported firmware to reboot into UF2 bootloader mode.
 
 This requires firmware with the custom `0xF6 + 0x04` bootloader command. It is not available in the `original` build.
+
+## Firmware Protocol
+
+The tray app talks to DS5Dongle through HID feature reports, using the same style as the web config page. Battery status is read from the normal `0x01` controller input report. See [docs/host-protocol.md](docs/host-protocol.md) for the report IDs and payloads.
+
+## Development
+
+Requirements for building from source:
+
+- Windows 10 or newer
+- .NET 8 SDK
+
+Build the original firmware flavor:
+
+```powershell
+dotnet restore
+dotnet build -c Release
+```
+
+Build the custom firmware flavor:
+
+```powershell
+dotnet build -c Release -p:DefineConstants=CUSTOM_FIRMWARE
+```
+
+Start the tray app from source:
+
+```powershell
+dotnet run --project .\src\DS5DongleTray\DS5DongleTray.csproj -c Release
+```
+
+Run one diagnostic poll and exit:
+
+```powershell
+dotnet run --project .\src\DS5DongleTray\DS5DongleTray.csproj -c Release -- --once
+```
+
+Tagged releases are built by GitHub Actions.
 
 ## Known Limitations
 
