@@ -1,4 +1,3 @@
-#if CUSTOM_FIRMWARE
 using System.Drawing;
 using System.Windows.Forms;
 
@@ -8,6 +7,7 @@ internal sealed class FirmwareUpdateForm : Form
 {
     private readonly FirmwareUpdater updater;
     private readonly Label releaseLabel;
+    private readonly Label currentFirmwareLabel;
     private readonly Label assetLabel;
     private readonly Label statusLabel;
     private readonly TextBox firmwarePathTextBox;
@@ -17,6 +17,9 @@ internal sealed class FirmwareUpdateForm : Form
     private readonly Button enterBootloaderButton;
     private readonly Button openReleaseButton;
     private FirmwareRelease? latestRelease;
+    private FirmwareVersionStatus latestStatus = FirmwareVersionStatus.Unknown;
+    private bool firmwareUpdateSupported;
+    private FirmwareReleaseChannel releaseChannel = FirmwareReleaseChannel.Official;
 
     public FirmwareUpdateForm(FirmwareUpdater updater)
     {
@@ -27,20 +30,21 @@ internal sealed class FirmwareUpdateForm : Form
         StartPosition = FormStartPosition.CenterScreen;
         MinimizeBox = false;
         MaximizeBox = false;
-        ShowInTaskbar = false;
-        ClientSize = new Size(520, 292);
+        ShowInTaskbar = true;
+        ClientSize = new Size(520, 322);
 
         releaseLabel = NewLabel("Latest release: checking...", new Point(16, 18), new Size(488, 24));
-        assetLabel = NewLabel("Firmware asset: checking...", new Point(16, 48), new Size(488, 24));
-        firmwarePathTextBox = new TextBox { Location = new Point(16, 82), Size = new Size(366, 24) };
-        browseFirmwareButton = new Button { Text = "Browse...", Location = new Point(390, 80), Size = new Size(114, 30) };
-        statusLabel = NewLabel("", new Point(16, 124), new Size(488, 58));
+        currentFirmwareLabel = NewLabel("Current firmware: checking...", new Point(16, 48), new Size(488, 24));
+        assetLabel = NewLabel("Firmware asset: checking...", new Point(16, 78), new Size(488, 24));
+        firmwarePathTextBox = new TextBox { Location = new Point(16, 112), Size = new Size(366, 24) };
+        browseFirmwareButton = new Button { Text = "Browse...", Location = new Point(390, 110), Size = new Size(114, 30), Enabled = false };
+        statusLabel = NewLabel("", new Point(16, 154), new Size(488, 58));
 
-        updateButton = new Button { Text = "Update Latest", Location = new Point(16, 196), Size = new Size(112, 30), Enabled = false };
-        installLocalFirmwareButton = new Button { Text = "Install Local UF2", Location = new Point(136, 196), Size = new Size(122, 30) };
-        enterBootloaderButton = new Button { Text = "Enter Bootloader", Location = new Point(266, 196), Size = new Size(122, 30) };
-        openReleaseButton = new Button { Text = "Open Release", Location = new Point(396, 196), Size = new Size(108, 30), Enabled = false };
-        var closeButton = new Button { Text = "Close", Location = new Point(424, 248), Size = new Size(80, 30) };
+        updateButton = new Button { Text = "Update Latest", Location = new Point(16, 226), Size = new Size(112, 30), Enabled = false };
+        installLocalFirmwareButton = new Button { Text = "Install Local UF2", Location = new Point(136, 226), Size = new Size(122, 30), Enabled = false };
+        enterBootloaderButton = new Button { Text = "Enter Bootloader", Location = new Point(266, 226), Size = new Size(122, 30), Enabled = false };
+        openReleaseButton = new Button { Text = "Open Release", Location = new Point(396, 226), Size = new Size(108, 30), Enabled = false };
+        var closeButton = new Button { Text = "Close", Location = new Point(424, 278), Size = new Size(80, 30) };
 
         updateButton.Click += async (_, _) => await UpdateFirmwareAsync();
         browseFirmwareButton.Click += (_, _) => BrowseFirmwareFile();
@@ -57,6 +61,7 @@ internal sealed class FirmwareUpdateForm : Form
 
         Controls.AddRange([
             releaseLabel,
+            currentFirmwareLabel,
             assetLabel,
             firmwarePathTextBox,
             browseFirmwareButton,
@@ -74,30 +79,57 @@ internal sealed class FirmwareUpdateForm : Form
     {
         try
         {
-            latestRelease = await updater.GetLatestReleaseAsync();
-            releaseLabel.Text = $"Latest release: {latestRelease.Tag}";
+            var currentFirmware = await updater.GetCurrentFirmwareVersionAsync();
+            firmwareUpdateSupported = currentFirmware?.Contains("-custom", StringComparison.OrdinalIgnoreCase) == true;
+            releaseChannel = FirmwareUpdater.GetChannelForFirmware(currentFirmware);
+            latestRelease = await updater.GetLatestReleaseAsync(releaseChannel);
+            latestStatus = FirmwareUpdater.GetVersionStatus(currentFirmware, latestRelease);
+
+            releaseLabel.Text = $"Latest release: {latestRelease.Tag} ({latestRelease.Repository})";
+            currentFirmwareLabel.Text = $"Current firmware: {currentFirmware ?? "not detected"}";
             assetLabel.Text = $"Firmware asset: {latestRelease.Asset.Name}";
-            statusLabel.Text = "Ready to update. The dongle will reboot into UF2 mode.";
-            updateButton.Enabled = true;
+            updateButton.Text = firmwareUpdateSupported ? "Update Latest" : "Download Latest";
+
+            if (!firmwareUpdateSupported)
+            {
+                statusLabel.Text = latestStatus == FirmwareVersionStatus.UpdateAvailable
+                    ? "Official update available. Download only; flash manually with BOOTSEL."
+                    : latestStatus == FirmwareVersionStatus.UpToDate
+                        ? "Current official firmware is already up to date."
+                        : "Current firmware could not be checked. Official release download is available only after detection.";
+            }
+            else if (latestStatus == FirmwareVersionStatus.UpToDate)
+            {
+                statusLabel.Text = "Current firmware is already up to date.";
+            }
+            else
+            {
+                statusLabel.Text = latestStatus == FirmwareVersionStatus.Unknown
+                    ? "Current firmware could not be checked. Connect DS5Dongle before updating."
+                    : "Update available. The dongle will reboot into UF2 mode.";
+            }
+
             openReleaseButton.Enabled = true;
+            SetBusy(false);
         }
         catch (Exception ex)
         {
+            latestStatus = FirmwareVersionStatus.Unknown;
+            firmwareUpdateSupported = false;
+            currentFirmwareLabel.Text = "Current firmware: unknown";
             statusLabel.Text = $"Could not check releases: {ex.Message}";
-            browseFirmwareButton.Enabled = true;
-            installLocalFirmwareButton.Enabled = true;
-            enterBootloaderButton.Enabled = true;
+            browseFirmwareButton.Enabled = false;
+            installLocalFirmwareButton.Enabled = false;
+            enterBootloaderButton.Enabled = false;
         }
     }
 
     private async Task UpdateFirmwareAsync()
     {
-        var confirm = MessageBox.Show(
-            this,
-            "The dongle will reboot into UF2 bootloader mode, then the app will copy the latest firmware to it. Continue?",
-            "Update Firmware",
-            MessageBoxButtons.OKCancel,
-            MessageBoxIcon.Question);
+        var confirmMessage = firmwareUpdateSupported
+            ? "The dongle will reboot into UF2 bootloader mode, then the app will copy the latest firmware to it. Continue?"
+            : "The latest official firmware will be downloaded to your Downloads folder. Flashing is not automated for original firmware. Continue?";
+        var confirm = MessageBox.Show(this, confirmMessage, "Firmware Update", MessageBoxButtons.OKCancel, MessageBoxIcon.Question);
 
         if (confirm != DialogResult.OK)
         {
@@ -109,8 +141,17 @@ internal sealed class FirmwareUpdateForm : Form
 
         try
         {
-            var result = await updater.DownloadAndInstallLatestAsync(progress);
-            statusLabel.Text = $"Updated with {result.Release.Asset.Name}.";
+            if (firmwareUpdateSupported)
+            {
+                var result = await updater.DownloadAndInstallLatestAsync(releaseChannel, progress);
+                statusLabel.Text = $"Updated with {result.Release.Asset.Name}.";
+            }
+            else
+            {
+                var result = await updater.DownloadLatestAsync(releaseChannel, progress);
+                firmwarePathTextBox.Text = result.DownloadPath;
+                statusLabel.Text = $"Downloaded {result.Release.Asset.Name}. Flash manually with BOOTSEL.";
+            }
         }
         catch (Exception ex)
         {
@@ -234,10 +275,10 @@ internal sealed class FirmwareUpdateForm : Form
 
     private void SetBusy(bool busy)
     {
-        updateButton.Enabled = !busy && latestRelease is not null;
-        browseFirmwareButton.Enabled = !busy;
-        installLocalFirmwareButton.Enabled = !busy;
-        enterBootloaderButton.Enabled = !busy;
+        updateButton.Enabled = !busy && latestRelease is not null && latestStatus == FirmwareVersionStatus.UpdateAvailable;
+        browseFirmwareButton.Enabled = !busy && firmwareUpdateSupported;
+        installLocalFirmwareButton.Enabled = !busy && firmwareUpdateSupported;
+        enterBootloaderButton.Enabled = !busy && firmwareUpdateSupported;
         openReleaseButton.Enabled = !busy && latestRelease is not null;
     }
 
@@ -258,4 +299,3 @@ internal sealed class FirmwareUpdateForm : Form
         };
     }
 }
-#endif

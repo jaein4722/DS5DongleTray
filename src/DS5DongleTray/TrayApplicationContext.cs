@@ -7,24 +7,22 @@ namespace DS5DongleTray;
 internal sealed class TrayApplicationContext : ApplicationContext
 {
     private const string ConfigPageUrl = "https://ds5.awalol.eu.org";
-#if CUSTOM_FIRMWARE
-    private const string GitHubRepositoryUrl = "https://github.com/jaein4722/DS5Dongle";
-#else
     private const string GitHubRepositoryUrl = "https://github.com/awalol/DS5Dongle";
-#endif
     private readonly DongleHidClient client;
     private readonly NotifyIcon notifyIcon;
     private readonly System.Windows.Forms.Timer timer;
+    private readonly System.Windows.Forms.Timer appUpdateTimer;
     private readonly ToolStripMenuItem batteryItem;
     private readonly ToolStripMenuItem firmwareItem;
     private readonly ToolStripMenuItem rssiItem;
+    private readonly ToolStripMenuItem appUpdateStatusItem;
     private readonly ToolStripMenuItem refreshItem;
     private SettingsForm? settingsForm;
-#if CUSTOM_FIRMWARE
     private FirmwareUpdateForm? firmwareUpdateForm;
-#endif
+    private AppUpdateForm? appUpdateForm;
     private Icon? currentIcon;
     private bool polling;
+    private bool appUpdateChecking;
 
     public TrayApplicationContext(DongleHidClient client)
     {
@@ -33,11 +31,11 @@ internal sealed class TrayApplicationContext : ApplicationContext
         batteryItem = new ToolStripMenuItem("Battery: unknown") { Enabled = false };
         firmwareItem = new ToolStripMenuItem("Firmware: unknown") { Enabled = false };
         rssiItem = new ToolStripMenuItem("RSSI: unknown") { Enabled = false };
+        appUpdateStatusItem = new ToolStripMenuItem("App update: checking...") { Enabled = false, Visible = false };
         refreshItem = new ToolStripMenuItem("Refresh now", null, async (_, _) => await RefreshAsync());
         var settingsItem = new ToolStripMenuItem("Settings...", null, (_, _) => ShowSettings());
-#if CUSTOM_FIRMWARE
         var updateFirmwareItem = new ToolStripMenuItem("Update Firmware...", null, (_, _) => ShowFirmwareUpdate());
-#endif
+        var updateAppItem = new ToolStripMenuItem("Update App...", null, (_, _) => ShowAppUpdate());
         var openConfigItem = new ToolStripMenuItem("Open Config Page", null, (_, _) => OpenUrl(ConfigPageUrl));
         var openRepoItem = new ToolStripMenuItem("Open GitHub Repository", null, (_, _) => OpenUrl(GitHubRepositoryUrl));
         var exitItem = new ToolStripMenuItem("Exit", null, (_, _) => ExitThread());
@@ -48,12 +46,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
             batteryItem,
             firmwareItem,
             rssiItem,
+            appUpdateStatusItem,
             new ToolStripSeparator(),
             refreshItem,
             settingsItem,
-#if CUSTOM_FIRMWARE
             updateFirmwareItem,
-#endif
+            updateAppItem,
             new ToolStripSeparator(),
             openConfigItem,
             openRepoItem,
@@ -73,6 +71,14 @@ internal sealed class TrayApplicationContext : ApplicationContext
         timer = new System.Windows.Forms.Timer { Interval = 5000 };
         timer.Tick += async (_, _) => await RefreshAsync();
         timer.Start();
+
+        appUpdateTimer = new System.Windows.Forms.Timer { Interval = 15000 };
+        appUpdateTimer.Tick += async (_, _) =>
+        {
+            appUpdateTimer.Interval = (int)TimeSpan.FromDays(1).TotalMilliseconds;
+            await CheckForAppUpdateAsync();
+        };
+        appUpdateTimer.Start();
 
         _ = RefreshAsync();
     }
@@ -129,7 +135,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
         settingsForm.Show();
     }
 
-#if CUSTOM_FIRMWARE
     private void ShowFirmwareUpdate()
     {
         if (firmwareUpdateForm is { IsDisposed: false })
@@ -146,7 +151,45 @@ internal sealed class TrayApplicationContext : ApplicationContext
         };
         firmwareUpdateForm.Show();
     }
-#endif
+
+    private void ShowAppUpdate()
+    {
+        if (appUpdateForm is { IsDisposed: false })
+        {
+            appUpdateForm.Activate();
+            return;
+        }
+
+        appUpdateForm = new AppUpdateForm(new AppUpdater());
+        appUpdateForm.FormClosed += (_, _) => appUpdateForm = null;
+        appUpdateForm.Show();
+    }
+
+    private async Task CheckForAppUpdateAsync()
+    {
+        if (appUpdateChecking)
+        {
+            return;
+        }
+
+        appUpdateChecking = true;
+        try
+        {
+            var result = await new AppUpdater().CheckForUpdateAsync();
+            appUpdateStatusItem.Text = result.IsUpdateAvailable
+                ? $"App update available: {result.LatestRelease.Tag}"
+                : "App update: up to date";
+            appUpdateStatusItem.Visible = result.IsUpdateAvailable;
+        }
+        catch
+        {
+            appUpdateStatusItem.Visible = false;
+        }
+        finally
+        {
+            appUpdateChecking = false;
+        }
+    }
 
     private static string TrimTooltip(string text)
     {
@@ -161,11 +204,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
     protected override void ExitThreadCore()
     {
         settingsForm?.Close();
-#if CUSTOM_FIRMWARE
         firmwareUpdateForm?.Close();
-#endif
+        appUpdateForm?.Close();
         timer.Stop();
+        appUpdateTimer.Stop();
         timer.Dispose();
+        appUpdateTimer.Dispose();
         notifyIcon.Visible = false;
         notifyIcon.Dispose();
         currentIcon?.Dispose();

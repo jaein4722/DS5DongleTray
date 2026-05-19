@@ -18,9 +18,7 @@ internal sealed class DongleHidClient
     private const byte CommandApplyConfig = 0x01;
     private const byte CommandSaveConfig = 0x02;
     private const byte CommandReconnectUsb = 0x03;
-#if CUSTOM_FIRMWARE
     private const byte CommandEnterBootloader = 0x04;
-#endif
 
     private static readonly (int Vid, int Pid)[] CandidateIds =
     [
@@ -114,12 +112,21 @@ internal sealed class DongleHidClient
         return SendCommandAsync(CommandReconnectUsb);
     }
 
-#if CUSTOM_FIRMWARE
     public Task EnterBootloaderAsync()
     {
-        return SendCommandAsync(CommandEnterBootloader);
+        return Task.Run(() =>
+        {
+            var snapshot = ReadSnapshot();
+            if (!snapshot.SupportsTrayFirmwareUpdate)
+            {
+                throw new InvalidOperationException(
+                    $"Firmware update requires custom firmware with '-custom' in the version string. Current firmware: {snapshot.FirmwareVersion ?? "unknown"}.");
+            }
+
+            using var stream = OpenDongleStream();
+            stream.SetFeature(NewCommandReport(CommandEnterBootloader));
+        });
     }
-#endif
 
     private static IEnumerable<HidDevice> EnumerateCandidates()
     {

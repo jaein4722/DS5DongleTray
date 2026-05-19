@@ -52,14 +52,6 @@ jobs:
     name: Build Windows tray app
     needs: create-release
     runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - flavor: original
-            define_constants: ""
-          - flavor: custom
-            define_constants: CUSTOM_FIRMWARE
     env:
       PROJECT: src/DS5DongleTray/DS5DongleTray.csproj
       RELEASE_TAG: ${{ needs.create-release.outputs.tag }}
@@ -67,22 +59,27 @@ jobs:
       DOTNET_CLI_TELEMETRY_OPTOUT: true
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
           ref: ${{ env.RELEASE_TAG }}
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
 
       - name: Restore
         run: dotnet restore $env:PROJECT
 
-      - name: Publish win-x64 (${{ matrix.flavor }})
+      - name: Publish win-x64
         shell: pwsh
         run: |
           $version = $env:RELEASE_TAG.TrimStart('v')
+          if ($version -match '^(\d+\.\d+\.\d+)') {
+            $numericVersion = $Matches[1]
+          } else {
+            $numericVersion = "0.0.0"
+          }
           $publishArgs = @(
             "publish", $env:PROJECT,
             "-c", "Release",
@@ -90,20 +87,20 @@ jobs:
             "--self-contained", "true",
             "-p:PublishSingleFile=true",
             "-p:Version=$version",
-            "-o", "publish/${{ matrix.flavor }}"
+            "-p:InformationalVersion=$version",
+            "-p:FileVersion=$numericVersion",
+            "-p:AssemblyVersion=$numericVersion",
+            "-p:IncludeSourceRevisionInInformationalVersion=false",
+            "-o", "publish/win-x64"
           )
-          $defineConstants = "${{ matrix.define_constants }}"
-          if ($defineConstants) {
-            $publishArgs += "-p:DefineConstants=$defineConstants"
-          }
           dotnet @publishArgs
 
-      - name: Package (${{ matrix.flavor }})
+      - name: Package
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path artifacts | Out-Null
-          $asset = "artifacts/DS5DongleTray-$env:RELEASE_TAG-${{ matrix.flavor }}-win-x64.exe"
-          Copy-Item "publish/${{ matrix.flavor }}/DS5DongleTray.exe" $asset -Force
+          $asset = "artifacts/DS5DongleTray-$env:RELEASE_TAG-win-x64.exe"
+          Copy-Item "publish/win-x64/DS5DongleTray.exe" $asset -Force
           Get-FileHash $asset -Algorithm SHA256 |
             ForEach-Object { "$($_.Hash)  $(Split-Path $asset -Leaf)" } |
             Set-Content "$asset.sha256"
@@ -111,7 +108,7 @@ jobs:
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7
         with:
-          name: DS5DongleTray-${{ env.RELEASE_TAG }}-${{ matrix.flavor }}-win-x64
+          name: DS5DongleTray-${{ env.RELEASE_TAG }}-win-x64
           path: artifacts/*
           if-no-files-found: error
 

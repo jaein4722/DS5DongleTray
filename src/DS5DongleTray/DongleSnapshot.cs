@@ -14,6 +14,9 @@ internal sealed record DongleSnapshot
     public bool ConfigUnsupported { get; init; }
     public string? Error { get; init; }
 
+    public bool SupportsTrayFirmwareUpdate =>
+        FirmwareVersion?.Contains("-custom", StringComparison.OrdinalIgnoreCase) == true;
+
     public string TooltipText
     {
         get

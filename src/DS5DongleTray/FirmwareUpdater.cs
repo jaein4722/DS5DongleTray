@@ -1,13 +1,14 @@
-#if CUSTOM_FIRMWARE
 using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace DS5DongleTray;
 
 internal sealed class FirmwareUpdater
 {
-    private const string LatestReleaseApiUrl = "https://api.github.com/repos/jaein4722/DS5Dongle/releases/latest";
+    private const string OfficialRepository = "awalol/DS5Dongle";
+    private const string CustomRepository = "jaein4722/DS5Dongle";
     private readonly DongleHidClient client;
     private readonly HttpClient httpClient = new();
 
@@ -18,13 +19,14 @@ internal sealed class FirmwareUpdater
         httpClient.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("DS5DongleTray", "1.0"));
     }
 
-    public async Task<FirmwareRelease> GetLatestReleaseAsync(CancellationToken cancellationToken = default)
+    public async Task<FirmwareRelease> GetLatestReleaseAsync(FirmwareReleaseChannel channel, CancellationToken cancellationToken = default)
     {
-        using var stream = await httpClient.GetStreamAsync(LatestReleaseApiUrl, cancellationToken).ConfigureAwait(false);
+        var repository = GetRepository(channel);
+        using var stream = await httpClient.GetStreamAsync($"https://api.github.com/repos/{repository}/releases/latest", cancellationToken).ConfigureAwait(false);
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
         var root = document.RootElement;
         var tag = root.GetProperty("tag_name").GetString() ?? "latest";
-        var htmlUrl = root.GetProperty("html_url").GetString() ?? "https://github.com/jaein4722/DS5Dongle/releases";
+        var htmlUrl = root.GetProperty("html_url").GetString() ?? $"https://github.com/{repository}/releases";
         var assets = root.GetProperty("assets").EnumerateArray()
             .Select(asset => new FirmwareAsset(
                 asset.GetProperty("name").GetString() ?? "",
@@ -35,20 +37,71 @@ internal sealed class FirmwareUpdater
         var selectedAsset = SelectStandardFirmwareAsset(assets)
             ?? throw new InvalidOperationException("Latest release does not contain a standard .uf2 firmware asset.");
 
-        return new FirmwareRelease(tag, htmlUrl, selectedAsset);
+        return new FirmwareRelease(tag, htmlUrl, selectedAsset, channel, repository);
     }
 
-    public async Task<FirmwareUpdateResult> DownloadAndInstallLatestAsync(IProgress<string>? progress = null, CancellationToken cancellationToken = default)
+    public async Task<string?> GetCurrentFirmwareVersionAsync(CancellationToken cancellationToken = default)
+    {
+        var snapshot = await client.ReadSnapshotAsync().ConfigureAwait(false);
+        return snapshot.DeviceFound ? snapshot.FirmwareVersion : null;
+    }
+
+    public async Task<UpdateCheckResult> CheckForUpdateAsync(CancellationToken cancellationToken = default)
+    {
+        var currentFirmware = await GetCurrentFirmwareVersionAsync(cancellationToken).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(currentFirmware))
+        {
+            return new UpdateCheckResult(FirmwareVersionStatus.Unknown, currentFirmware, null);
+        }
+
+        var channel = GetChannelForFirmware(currentFirmware);
+        var release = await GetLatestReleaseAsync(channel, cancellationToken).ConfigureAwait(false);
+        return new UpdateCheckResult(GetVersionStatus(currentFirmware, release), currentFirmware, release);
+    }
+
+    public static FirmwareVersionStatus GetVersionStatus(string? currentVersion, FirmwareRelease latestRelease)
+    {
+        if (string.IsNullOrWhiteSpace(currentVersion))
+        {
+            return FirmwareVersionStatus.Unknown;
+        }
+
+        var current = NormalizeVersion(currentVersion);
+        var latest = NormalizeVersion(latestRelease.Tag);
+
+        if (string.Equals(current, latest, StringComparison.OrdinalIgnoreCase))
+        {
+            return FirmwareVersionStatus.UpToDate;
+        }
+
+        var latestBase = NormalizeVersion(StripCustomSuffix(latestRelease.Tag));
+        if (!string.IsNullOrWhiteSpace(latestBase) &&
+            string.Equals(current, latestBase, StringComparison.OrdinalIgnoreCase))
+        {
+            return FirmwareVersionStatus.UpToDate;
+        }
+
+        return FirmwareVersionStatus.UpdateAvailable;
+    }
+
+    public async Task<FirmwareDownloadResult> DownloadLatestAsync(FirmwareReleaseChannel channel, IProgress<string>? progress = null, CancellationToken cancellationToken = default)
     {
         progress?.Report("Checking latest release...");
-        var release = await GetLatestReleaseAsync(cancellationToken).ConfigureAwait(false);
+        var release = await GetLatestReleaseAsync(channel, cancellationToken).ConfigureAwait(false);
 
         progress?.Report($"Downloading {release.Asset.Name}...");
-        var downloadPath = Path.Combine(Path.GetTempPath(), $"DS5Dongle-{release.Tag}-{release.Asset.Name}");
+        var downloadPath = GetDownloadPath(release);
         await DownloadFileAsync(release.Asset.DownloadUrl, downloadPath, cancellationToken).ConfigureAwait(false);
+        progress?.Report($"Downloaded to {downloadPath}.");
 
-        var destination = await InstallFirmwareFileAsync(downloadPath, release.Asset.Name, progress, cancellationToken).ConfigureAwait(false);
-        return new FirmwareUpdateResult(release, destination);
+        return new FirmwareDownloadResult(release, downloadPath);
+    }
+
+    public async Task<FirmwareUpdateResult> DownloadAndInstallLatestAsync(FirmwareReleaseChannel channel, IProgress<string>? progress = null, CancellationToken cancellationToken = default)
+    {
+        var download = await DownloadLatestAsync(channel, progress, cancellationToken).ConfigureAwait(false);
+        var destination = await InstallFirmwareFileAsync(download.DownloadPath, download.Release.Asset.Name, progress, cancellationToken).ConfigureAwait(false);
+        return new FirmwareUpdateResult(download.Release, destination);
     }
 
     public async Task<string> InstallLocalFirmwareAsync(string firmwarePath, IProgress<string>? progress = null, CancellationToken cancellationToken = default)
@@ -83,6 +136,23 @@ internal sealed class FirmwareUpdater
         progress?.Report("UF2 bootloader drive detected.");
     }
 
+    public static void OpenReleasePage(FirmwareRelease release)
+    {
+        Process.Start(new ProcessStartInfo(release.HtmlUrl) { UseShellExecute = true });
+    }
+
+    public static string GetRepository(FirmwareReleaseChannel channel)
+    {
+        return channel == FirmwareReleaseChannel.Custom ? CustomRepository : OfficialRepository;
+    }
+
+    public static FirmwareReleaseChannel GetChannelForFirmware(string? firmwareVersion)
+    {
+        return firmwareVersion?.Contains("-custom", StringComparison.OrdinalIgnoreCase) == true
+            ? FirmwareReleaseChannel.Custom
+            : FirmwareReleaseChannel.Official;
+    }
+
     private async Task<string> InstallFirmwareFileAsync(string firmwarePath, string fileName, IProgress<string>? progress, CancellationToken cancellationToken)
     {
         progress?.Report("Requesting UF2 bootloader...");
@@ -102,11 +172,6 @@ internal sealed class FirmwareUpdater
         return destination;
     }
 
-    public static void OpenReleasePage(FirmwareRelease release)
-    {
-        Process.Start(new ProcessStartInfo(release.HtmlUrl) { UseShellExecute = true });
-    }
-
     private static FirmwareAsset? SelectStandardFirmwareAsset(IEnumerable<FirmwareAsset> assets)
     {
         var candidates = assets
@@ -117,6 +182,23 @@ internal sealed class FirmwareUpdater
         return candidates.FirstOrDefault(asset => asset.Name.Equals("ds5-bridge.uf2", StringComparison.OrdinalIgnoreCase))
             ?? candidates.FirstOrDefault(asset => asset.Name.StartsWith("ds5-bridge", StringComparison.OrdinalIgnoreCase))
             ?? candidates.FirstOrDefault();
+    }
+
+    private static string NormalizeVersion(string version)
+    {
+        return version.Trim().TrimStart('v', 'V');
+    }
+
+    private static string StripCustomSuffix(string version)
+    {
+        return Regex.Replace(version.Trim(), "-custom\\.\\d+$", "", RegexOptions.IgnoreCase);
+    }
+
+    private static string GetDownloadPath(FirmwareRelease release)
+    {
+        var downloads = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+        var directory = Directory.Exists(downloads) ? downloads : Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+        return Path.Combine(directory, $"DS5Dongle-{release.Tag}-{release.Asset.Name}");
     }
 
     private async Task DownloadFileAsync(string url, string path, CancellationToken cancellationToken)
@@ -180,9 +262,28 @@ internal sealed class FirmwareUpdater
     }
 }
 
-internal sealed record FirmwareRelease(string Tag, string HtmlUrl, FirmwareAsset Asset);
+internal sealed record FirmwareRelease(string Tag, string HtmlUrl, FirmwareAsset Asset, FirmwareReleaseChannel Channel, string Repository);
 
 internal sealed record FirmwareAsset(string Name, string DownloadUrl);
 
+internal sealed record FirmwareDownloadResult(FirmwareRelease Release, string DownloadPath);
+
 internal sealed record FirmwareUpdateResult(FirmwareRelease Release, string DestinationPath);
-#endif
+
+internal sealed record UpdateCheckResult(FirmwareVersionStatus Status, string? CurrentVersion, FirmwareRelease? LatestRelease)
+{
+    public bool IsUpdateAvailable => Status == FirmwareVersionStatus.UpdateAvailable;
+}
+
+internal enum FirmwareReleaseChannel
+{
+    Official,
+    Custom
+}
+
+internal enum FirmwareVersionStatus
+{
+    Unknown,
+    UpToDate,
+    UpdateAvailable
+}
