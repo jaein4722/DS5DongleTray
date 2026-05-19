@@ -16,6 +16,7 @@ internal sealed class SettingsForm : Form
     private readonly ComboBox controllerModeInput;
     private readonly Label statusLabel;
     private DongleConfig? currentConfig;
+    private DongleConfig? lastSavedConfig;
     private bool loading;
 
     public SettingsForm(DongleHidClient client)
@@ -108,6 +109,7 @@ internal sealed class SettingsForm : Form
             }
 
             currentConfig = config;
+            lastSavedConfig = config;
             ApplyConfigToControls(config);
             statusLabel.Text = "Config loaded.";
         });
@@ -121,7 +123,9 @@ internal sealed class SettingsForm : Form
             var config = ReadConfigFromControls();
             await client.ApplyConfigAsync(config);
             currentConfig = config;
-            statusLabel.Text = "Applied to RAM.";
+            statusLabel.Text = RequiresUsbReconnect(config, lastSavedConfig)
+                ? "Applied to RAM. Reconnect USB is required for polling/controller changes."
+                : "Applied to RAM.";
         });
     }
 
@@ -129,8 +133,22 @@ internal sealed class SettingsForm : Form
     {
         await RunUiTaskAsync("Saving config...", async () =>
         {
+            ClampInputs();
+            var config = ReadConfigFromControls();
+            var reconnectRequired = RequiresUsbReconnect(config, lastSavedConfig);
+
+            await client.ApplyConfigAsync(config);
             await client.SaveConfigAsync();
-            statusLabel.Text = "Saved to flash.";
+            currentConfig = config;
+            lastSavedConfig = config;
+            statusLabel.Text = reconnectRequired
+                ? "Saved to flash. Reconnect USB is required for polling/controller changes."
+                : "Saved to flash.";
+
+            if (reconnectRequired)
+            {
+                BeginInvoke(new Action(() => PromptReconnectUsbAfterSave()));
+            }
         });
     }
 
@@ -215,6 +233,28 @@ internal sealed class SettingsForm : Form
         speakerVolumeInput.Clamp();
         inactiveTimeInput.Clamp();
         audioBufferInput.Clamp();
+    }
+
+    private async void PromptReconnectUsbAfterSave()
+    {
+        var result = MessageBox.Show(
+            this,
+            "Polling rate mode or controller mode changed. Windows will not observe this change until USB is reconnected.\n\nReconnect USB now?",
+            "Reconnect USB Required",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question);
+
+        if (result == DialogResult.Yes)
+        {
+            await ReconnectUsbAsync();
+        }
+    }
+
+    private static bool RequiresUsbReconnect(DongleConfig config, DongleConfig? previousConfig)
+    {
+        return previousConfig is not null
+            && (config.PollingRateMode != previousConfig.PollingRateMode
+                || config.ControllerMode != previousConfig.ControllerMode);
     }
 
     private static decimal DbToPercent(float db)
