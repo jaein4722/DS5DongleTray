@@ -12,12 +12,12 @@ internal sealed class DongleHidClient
     private const byte ReportConfig = 0xF7;
     private const byte ReportCommand = 0xF6;
     private const byte ReportRssi = 0xF9;
-    private const byte ReportBatteryStatus = 0xFA;
     private const int FeatureReportLength = 64;
+    private const int InputReportReadTimeoutMs = 300;
+    private const int InputReportReadAttempts = 3;
     private const byte CommandApplyConfig = 0x01;
     private const byte CommandSaveConfig = 0x02;
     private const byte CommandReconnectUsb = 0x03;
-    private const byte CommandEnterBootloader = 0x04;
 
     private static readonly (int Vid, int Pid)[] CandidateIds =
     [
@@ -55,7 +55,7 @@ internal sealed class DongleHidClient
                     }
 
                     var rssi = TryReadRssi(stream);
-                    var battery = TryReadBattery(stream, out var batteryUnsupported);
+                    var battery = TryReadBatteryFromInput(hidDevice, stream);
                     var config = TryReadConfig(stream, out var configUnsupported);
 
                     return new DongleSnapshot
@@ -66,7 +66,7 @@ internal sealed class DongleHidClient
                         Rssi = rssi,
                         Battery = battery,
                         Config = config,
-                        BatteryUnsupported = batteryUnsupported,
+                        BatteryUnsupported = false,
                         ConfigUnsupported = configUnsupported
                     };
                 }
@@ -109,11 +109,6 @@ internal sealed class DongleHidClient
     public Task ReconnectUsbAsync()
     {
         return SendCommandAsync(CommandReconnectUsb);
-    }
-
-    public Task EnterBootloaderAsync()
-    {
-        return SendCommandAsync(CommandEnterBootloader);
     }
 
     private static IEnumerable<HidDevice> EnumerateCandidates()
@@ -193,21 +188,46 @@ internal sealed class DongleHidClient
         }
     }
 
-    private static BatteryStatus? TryReadBattery(HidStream stream, out bool unsupported)
+    private static BatteryStatus? TryReadBatteryFromInput(HidDevice hidDevice, HidStream stream)
     {
-        unsupported = false;
-
+        var oldReadTimeout = stream.ReadTimeout;
         try
         {
-            var report = GetFeature(stream, ReportBatteryStatus);
-            return BatteryStatus.FromFeaturePayload(report);
+            stream.ReadTimeout = InputReportReadTimeoutMs;
+            var reportLength = Math.Max(hidDevice.GetMaxInputReportLength(), FeatureReportLength);
+
+            for (var attempt = 0; attempt < InputReportReadAttempts; attempt++)
+            {
+                var report = new byte[reportLength];
+                var bytesRead = stream.Read(report);
+                if (bytesRead == 0)
+                {
+                    continue;
+                }
+
+                if (report[0] != 0x01)
+                {
+                    Log($"Skipped input report 0x{report[0]:X2} while looking for battery state.");
+                    continue;
+                }
+
+                var battery = BatteryStatus.FromInputReport(report, bytesRead);
+                Log($"Input battery read succeeded: bytes={bytesRead}, level={battery.LevelRaw}, percent={battery.Percent}, state=0x{battery.PowerState:X2}, usbPower={battery.IsUsbPowered}.");
+                return battery;
+            }
+
+            Log("No 0x01 input report was observed while looking for battery state.");
         }
         catch (Exception ex)
         {
-            unsupported = true;
-            Log($"Battery read failed: {ex.GetType().Name}: {ex.Message}");
-            return null;
+            Log($"Input battery read failed: {ex.GetType().Name}: {ex.Message}");
         }
+        finally
+        {
+            stream.ReadTimeout = oldReadTimeout;
+        }
+
+        return null;
     }
 
     private static DongleConfig? TryReadConfig(HidStream stream, out bool unsupported)

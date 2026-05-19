@@ -1,29 +1,26 @@
 # DS5Dongle Host Protocol
 
-DS5DongleTray communicates with the DS5Dongle Pico firmware through HID feature reports. The firmware appears as a DualSense-compatible HID device, so the app first probes candidate devices by reading the DS5Dongle-specific firmware version report.
+DS5DongleTray communicates with the DS5Dongle Pico firmware through HID feature reports for management/config commands, and reads battery status from the normal DualSense-compatible `0x01` controller input report. The firmware appears as a DualSense-compatible HID device, so the app first probes candidate devices by reading the DS5Dongle-specific firmware version report.
 
 ## Reports
 
 | Report ID | Direction | Description |
 | --- | --- | --- |
-| `0xF6` | Host to device | Command report. Subcommands include apply config, save config, reconnect USB, enter UF2 bootloader. |
+| `0xF6` | Host to device | Command report. Subcommands include apply config, save config, and reconnect USB. |
 | `0xF7` | Device to host | Read packed firmware config body. |
 | `0xF8` | Device to host | Read firmware version string. |
 | `0xF9` | Device to host | Read cached Bluetooth RSSI as signed int8. |
-| `0xFA` | Device to host | Read cached DualSense battery status. |
 
-## Battery Status (`0xFA`)
+## Battery Status (`0x01`)
 
-Payload bytes after the report ID:
+Battery status is parsed from the normal controller input report:
 
 ```c
-uint8_t level_raw;          // 0..10, or 0xFF when unknown
-uint8_t percent;            // 0..100, or 0xFF when unknown
-uint8_t power_state;        // raw upper nibble from the DualSense battery byte
-uint8_t is_charging;        // 1 when power_state == 0x01
-uint8_t is_connected;       // whether the controller is currently known connected
-uint8_t is_fresh;           // whether the latest battery report is recent
-uint32_t last_report_age_ms;
+uint8_t battery = input_report[52];
+uint8_t level_raw = battery & 0x0F;          // 0..10
+uint8_t percent = min(level_raw, 10) * 10;   // 0..100
+uint8_t power_state = (battery >> 4) & 0x0F;
+uint8_t flags = input_report[53];            // USB power flags are used to disambiguate 0x02
 ```
 
 Power state names:
@@ -37,7 +34,7 @@ Power state names:
 
 ## Compatibility
 
-Firmware without `0xFA` is treated as battery-unsupported. Firmware without `0xF8` is not treated as DS5Dongle by the tray app.
+Firmware without `0xF8` is not treated as DS5Dongle by the tray app.
 
 ## Config Body (`0xF7`)
 
@@ -56,5 +53,3 @@ uint8_t controller_mode;         // 0: DS5, 1: DSE, 2: Auto
 ```
 
 To apply config immediately, send `0xF6` with payload byte `0x01` followed by the packed config body. To persist the current config to flash, send `0xF6` with payload byte `0x02`. To reconnect USB, send `0xF6` with payload byte `0x03`.
-
-To enter UF2 bootloader mode for firmware update, send `0xF6` with payload byte `0x04`. The device disconnects from normal HID mode and should reappear as a removable UF2 drive.

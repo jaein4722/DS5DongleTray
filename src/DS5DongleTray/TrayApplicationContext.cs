@@ -7,7 +7,7 @@ namespace DS5DongleTray;
 internal sealed class TrayApplicationContext : ApplicationContext
 {
     private const string ConfigPageUrl = "https://ds5.awalol.eu.org";
-    private const string GitHubRepositoryUrl = "https://github.com/jaein4722/DS5Dongle";
+    private const string GitHubRepositoryUrl = "https://github.com/awalol/DS5Dongle";
     private readonly DongleHidClient client;
     private readonly NotifyIcon notifyIcon;
     private readonly System.Windows.Forms.Timer timer;
@@ -16,7 +16,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem rssiItem;
     private readonly ToolStripMenuItem refreshItem;
     private SettingsForm? settingsForm;
-    private FirmwareUpdateForm? firmwareUpdateForm;
     private Icon? currentIcon;
     private bool polling;
 
@@ -29,7 +28,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
         rssiItem = new ToolStripMenuItem("RSSI: unknown") { Enabled = false };
         refreshItem = new ToolStripMenuItem("Refresh now", null, async (_, _) => await RefreshAsync());
         var settingsItem = new ToolStripMenuItem("Settings...", null, (_, _) => ShowSettings());
-        var updateFirmwareItem = new ToolStripMenuItem("Update Firmware...", null, (_, _) => ShowFirmwareUpdate());
         var openConfigItem = new ToolStripMenuItem("Open Config Page", null, (_, _) => OpenUrl(ConfigPageUrl));
         var openRepoItem = new ToolStripMenuItem("Open GitHub Repository", null, (_, _) => OpenUrl(GitHubRepositoryUrl));
         var exitItem = new ToolStripMenuItem("Exit", null, (_, _) => ExitThread());
@@ -43,7 +41,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
             new ToolStripSeparator(),
             refreshItem,
             settingsItem,
-            updateFirmwareItem,
             new ToolStripSeparator(),
             openConfigItem,
             openRepoItem,
@@ -119,23 +116,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
         settingsForm.Show();
     }
 
-    private void ShowFirmwareUpdate()
-    {
-        if (firmwareUpdateForm is { IsDisposed: false })
-        {
-            firmwareUpdateForm.Activate();
-            return;
-        }
-
-        firmwareUpdateForm = new FirmwareUpdateForm(new FirmwareUpdater(client));
-        firmwareUpdateForm.FormClosed += async (_, _) =>
-        {
-            firmwareUpdateForm = null;
-            await RefreshAsync();
-        };
-        firmwareUpdateForm.Show();
-    }
-
     private static string TrimTooltip(string text)
     {
         return text.Length <= 63 ? text : text[..63];
@@ -149,7 +129,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
     protected override void ExitThreadCore()
     {
         settingsForm?.Close();
-        firmwareUpdateForm?.Close();
         timer.Stop();
         timer.Dispose();
         notifyIcon.Visible = false;
