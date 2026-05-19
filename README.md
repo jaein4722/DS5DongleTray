@@ -5,7 +5,7 @@ DS5DongleTray is a small Windows notification-area app for DS5Dongle. It polls t
 ## Requirements
 
 - Windows 10 or newer
-- .NET 8 Desktop Runtime to run
+- [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/8.0) to run
 - .NET 8 SDK to build
 - DS5Dongle firmware with the `0xFA` battery status feature report
 
