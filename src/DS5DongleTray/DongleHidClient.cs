@@ -9,9 +9,15 @@ internal sealed class DongleHidClient
     private const int DualSensePid = 0x0CE6;
     private const int DualSenseEdgePid = 0x0DF2;
     private const byte ReportFirmwareVersion = 0xF8;
+    private const byte ReportConfig = 0xF7;
+    private const byte ReportCommand = 0xF6;
     private const byte ReportRssi = 0xF9;
     private const byte ReportBatteryStatus = 0xFA;
     private const int FeatureReportLength = 64;
+    private const byte CommandApplyConfig = 0x01;
+    private const byte CommandSaveConfig = 0x02;
+    private const byte CommandReconnectUsb = 0x03;
+    private const byte CommandEnterBootloader = 0x04;
 
     private static readonly (int Vid, int Pid)[] CandidateIds =
     [
@@ -50,6 +56,7 @@ internal sealed class DongleHidClient
 
                     var rssi = TryReadRssi(stream);
                     var battery = TryReadBattery(stream, out var batteryUnsupported);
+                    var config = TryReadConfig(stream, out var configUnsupported);
 
                     return new DongleSnapshot
                     {
@@ -58,7 +65,9 @@ internal sealed class DongleHidClient
                         FirmwareVersion = firmware,
                         Rssi = rssi,
                         Battery = battery,
-                        BatteryUnsupported = batteryUnsupported
+                        Config = config,
+                        BatteryUnsupported = batteryUnsupported,
+                        ConfigUnsupported = configUnsupported
                     };
                 }
             }
@@ -71,6 +80,42 @@ internal sealed class DongleHidClient
         return new DongleSnapshot { DeviceFound = false };
     }
 
+    public Task<DongleConfig?> ReadConfigAsync()
+    {
+        return Task.Run(() =>
+        {
+            using var stream = OpenDongleStream();
+            return TryReadConfig(stream, out _);
+        });
+    }
+
+    public Task ApplyConfigAsync(DongleConfig config)
+    {
+        return Task.Run(() =>
+        {
+            using var stream = OpenDongleStream();
+            var payload = config.ToPayload();
+            var report = NewCommandReport(CommandApplyConfig);
+            Buffer.BlockCopy(payload, 0, report, 2, payload.Length);
+            stream.SetFeature(report);
+        });
+    }
+
+    public Task SaveConfigAsync()
+    {
+        return SendCommandAsync(CommandSaveConfig);
+    }
+
+    public Task ReconnectUsbAsync()
+    {
+        return SendCommandAsync(CommandReconnectUsb);
+    }
+
+    public Task EnterBootloaderAsync()
+    {
+        return SendCommandAsync(CommandEnterBootloader);
+    }
+
     private static IEnumerable<HidDevice> EnumerateCandidates()
     {
         var list = DeviceList.Local;
@@ -81,6 +126,37 @@ internal sealed class DongleHidClient
                 yield return device;
             }
         }
+    }
+
+    private static HidStream OpenDongleStream()
+    {
+        foreach (var hidDevice in EnumerateCandidates())
+        {
+            try
+            {
+                if (!hidDevice.TryOpen(out var stream))
+                {
+                    continue;
+                }
+
+                stream.ReadTimeout = 1000;
+                stream.WriteTimeout = 1000;
+
+                var firmware = TryReadFirmware(stream);
+                if (!string.IsNullOrWhiteSpace(firmware))
+                {
+                    return stream;
+                }
+
+                stream.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Log($"Open dongle failed: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
+        throw new InvalidOperationException("DS5Dongle was not found.");
     }
 
     private static string? TryReadFirmware(HidStream stream)
@@ -134,11 +210,46 @@ internal sealed class DongleHidClient
         }
     }
 
+    private static DongleConfig? TryReadConfig(HidStream stream, out bool unsupported)
+    {
+        unsupported = false;
+
+        try
+        {
+            var report = GetFeature(stream, ReportConfig);
+            var config = DongleConfig.FromFeaturePayload(report);
+            return config.IsSupported ? config : null;
+        }
+        catch (Exception ex)
+        {
+            unsupported = true;
+            Log($"Config read failed: {ex.GetType().Name}: {ex.Message}");
+            return null;
+        }
+    }
+
     private static byte[] GetFeature(HidStream stream, byte reportId)
     {
         var report = new byte[FeatureReportLength];
         report[0] = reportId;
         stream.GetFeature(report);
+        return report;
+    }
+
+    private Task SendCommandAsync(byte command)
+    {
+        return Task.Run(() =>
+        {
+            using var stream = OpenDongleStream();
+            stream.SetFeature(NewCommandReport(command));
+        });
+    }
+
+    private static byte[] NewCommandReport(byte command)
+    {
+        var report = new byte[FeatureReportLength];
+        report[0] = ReportCommand;
+        report[1] = command;
         return report;
     }
 

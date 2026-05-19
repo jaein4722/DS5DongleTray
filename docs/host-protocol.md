@@ -6,7 +6,7 @@ DS5DongleTray communicates with the DS5Dongle Pico firmware through HID feature 
 
 | Report ID | Direction | Description |
 | --- | --- | --- |
-| `0xF6` | Host to device | Command report. Subcommands include apply config, save config, reconnect USB. |
+| `0xF6` | Host to device | Command report. Subcommands include apply config, save config, reconnect USB, enter UF2 bootloader. |
 | `0xF7` | Device to host | Read packed firmware config body. |
 | `0xF8` | Device to host | Read firmware version string. |
 | `0xF9` | Device to host | Read cached Bluetooth RSSI as signed int8. |
@@ -38,3 +38,23 @@ Power state names:
 ## Compatibility
 
 Firmware without `0xFA` is treated as battery-unsupported. Firmware without `0xF8` is not treated as DS5Dongle by the tray app.
+
+## Config Body (`0xF7`)
+
+Current firmware config body layout:
+
+```c
+uint8_t config_version;
+float haptics_gain;              // 1.0..2.0
+float speaker_volume;            // -100..0 dB
+uint8_t inactive_time;           // 5..60 min
+uint8_t disable_inactive_disconnect;
+uint8_t disable_pico_led;
+uint8_t polling_rate_mode;       // 0: 250 Hz, 1: 500 Hz, 2: real-time
+uint8_t audio_buffer_length;     // 16..128
+uint8_t controller_mode;         // 0: DS5, 1: DSE, 2: Auto
+```
+
+To apply config immediately, send `0xF6` with payload byte `0x01` followed by the packed config body. To persist the current config to flash, send `0xF6` with payload byte `0x02`. To reconnect USB, send `0xF6` with payload byte `0x03`.
+
+To enter UF2 bootloader mode for firmware update, send `0xF6` with payload byte `0x04`. The device disconnects from normal HID mode and should reappear as a removable UF2 drive.

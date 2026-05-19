@@ -9,7 +9,9 @@ internal sealed record DongleSnapshot
     public string? FirmwareVersion { get; init; }
     public int? Rssi { get; init; }
     public BatteryStatus? Battery { get; init; }
+    public DongleConfig? Config { get; init; }
     public bool BatteryUnsupported { get; init; }
+    public bool ConfigUnsupported { get; init; }
     public string? Error { get; init; }
 
     public string TooltipText
@@ -76,6 +78,7 @@ internal sealed record DongleSnapshot
         sb.AppendLine($"Firmware: {FirmwareVersion ?? "unsupported or unavailable"}");
         sb.AppendLine($"RSSI: {(Rssi.HasValue ? Rssi.Value.ToString() : "unsupported or unavailable")}");
         sb.AppendLine(BatteryMenuText);
+        sb.AppendLine(Config is null ? "Config: unsupported or unavailable" : $"Config: v{Config.ConfigVersion}, haptics {Config.HapticsGain:0.##}x, polling {Config.PollingRateText}");
 
         if (!string.IsNullOrWhiteSpace(Error))
         {

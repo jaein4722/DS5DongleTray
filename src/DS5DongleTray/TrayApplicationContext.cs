@@ -15,6 +15,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem firmwareItem;
     private readonly ToolStripMenuItem rssiItem;
     private readonly ToolStripMenuItem refreshItem;
+    private SettingsForm? settingsForm;
+    private FirmwareUpdateForm? firmwareUpdateForm;
     private Icon? currentIcon;
     private bool polling;
 
@@ -26,6 +28,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
         firmwareItem = new ToolStripMenuItem("Firmware: unknown") { Enabled = false };
         rssiItem = new ToolStripMenuItem("RSSI: unknown") { Enabled = false };
         refreshItem = new ToolStripMenuItem("Refresh now", null, async (_, _) => await RefreshAsync());
+        var settingsItem = new ToolStripMenuItem("Settings...", null, (_, _) => ShowSettings());
+        var updateFirmwareItem = new ToolStripMenuItem("Update Firmware...", null, (_, _) => ShowFirmwareUpdate());
         var openConfigItem = new ToolStripMenuItem("Open Config Page", null, (_, _) => OpenUrl(ConfigPageUrl));
         var openRepoItem = new ToolStripMenuItem("Open GitHub Repository", null, (_, _) => OpenUrl(GitHubRepositoryUrl));
         var exitItem = new ToolStripMenuItem("Exit", null, (_, _) => ExitThread());
@@ -38,6 +42,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
             rssiItem,
             new ToolStripSeparator(),
             refreshItem,
+            settingsItem,
+            updateFirmwareItem,
             new ToolStripSeparator(),
             openConfigItem,
             openRepoItem,
@@ -96,6 +102,40 @@ internal sealed class TrayApplicationContext : ApplicationContext
         oldIcon?.Dispose();
     }
 
+    private void ShowSettings()
+    {
+        if (settingsForm is { IsDisposed: false })
+        {
+            settingsForm.Activate();
+            return;
+        }
+
+        settingsForm = new SettingsForm(client);
+        settingsForm.FormClosed += async (_, _) =>
+        {
+            settingsForm = null;
+            await RefreshAsync();
+        };
+        settingsForm.Show();
+    }
+
+    private void ShowFirmwareUpdate()
+    {
+        if (firmwareUpdateForm is { IsDisposed: false })
+        {
+            firmwareUpdateForm.Activate();
+            return;
+        }
+
+        firmwareUpdateForm = new FirmwareUpdateForm(new FirmwareUpdater(client));
+        firmwareUpdateForm.FormClosed += async (_, _) =>
+        {
+            firmwareUpdateForm = null;
+            await RefreshAsync();
+        };
+        firmwareUpdateForm.Show();
+    }
+
     private static string TrimTooltip(string text)
     {
         return text.Length <= 63 ? text : text[..63];
@@ -108,6 +148,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     protected override void ExitThreadCore()
     {
+        settingsForm?.Close();
+        firmwareUpdateForm?.Close();
         timer.Stop();
         timer.Dispose();
         notifyIcon.Visible = false;
