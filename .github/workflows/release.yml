@@ -87,11 +87,11 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path artifacts | Out-Null
-          $zip = "artifacts/DS5DongleTray-$env:RELEASE_TAG-win-x64.zip"
-          Compress-Archive -Path publish/win-x64/* -DestinationPath $zip -Force
-          Get-FileHash $zip -Algorithm SHA256 |
-            ForEach-Object { "$($_.Hash)  $(Split-Path $zip -Leaf)" } |
-            Set-Content "artifacts/DS5DongleTray-$env:RELEASE_TAG-win-x64.sha256"
+          $asset = "artifacts/DS5DongleTray-$env:RELEASE_TAG-win-x64.exe"
+          Copy-Item "publish/win-x64/DS5DongleTray.exe" $asset -Force
+          Get-FileHash $asset -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash)  $(Split-Path $asset -Leaf)" } |
+            Set-Content "artifacts/DS5DongleTray-$env:RELEASE_TAG-win-x64.exe.sha256"
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7

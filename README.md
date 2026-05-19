@@ -28,10 +28,10 @@ src\DS5DongleTray\bin\Release\net8.0-windows10.0.17763.0\
 
 Tagged releases are built by GitHub Actions. Pushing a tag like `v0.1.0` creates a GitHub Release and attaches:
 
-- `DS5DongleTray-<tag>-win-x64.zip`
-- `DS5DongleTray-<tag>-win-x64.sha256`
+- `DS5DongleTray-<tag>-win-x64.exe`
+- `DS5DongleTray-<tag>-win-x64.exe.sha256`
 
-The release zip is framework-dependent and requires the .NET 8 Desktop Runtime.
+The release executable is framework-dependent and requires the .NET 8 Desktop Runtime.
 
 ## Run
 
