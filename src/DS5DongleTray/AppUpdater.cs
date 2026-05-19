@@ -129,9 +129,12 @@ internal sealed class AppUpdater
     {
         var target = Environment.ProcessPath
             ?? throw new InvalidOperationException("The current executable path could not be determined.");
+        var targetDirectory = Path.GetDirectoryName(target)
+            ?? throw new InvalidOperationException("The current executable directory could not be determined.");
+        var updatedTarget = Path.Combine(targetDirectory, Path.GetFileName(newExePath));
         var scriptPath = Path.Combine(Path.GetTempPath(), $"DS5DongleTrayUpdate-{Guid.NewGuid():N}.cmd");
         var pid = Environment.ProcessId;
-        File.WriteAllText(scriptPath, BuildUpdateScript(pid, target, newExePath), Encoding.ASCII);
+        File.WriteAllText(scriptPath, BuildUpdateScript(pid, target, updatedTarget, newExePath), Encoding.ASCII);
 
         Process.Start(new ProcessStartInfo
         {
@@ -203,14 +206,15 @@ internal sealed class AppUpdater
         return version.Trim().TrimStart('v', 'V');
     }
 
-    private static string BuildUpdateScript(int pid, string targetPath, string newExePath)
+    private static string BuildUpdateScript(int pid, string currentPath, string updatedPath, string newExePath)
     {
-        var backupPath = $"{targetPath}.bak";
+        var backupPath = $"{currentPath}.bak";
         return $"""
 @echo off
 setlocal
 set "PID={pid}"
-set "TARGET={targetPath}"
+set "CURRENT={currentPath}"
+set "UPDATED={updatedPath}"
 set "NEWEXE={newExePath}"
 set "BACKUP={backupPath}"
 
@@ -222,15 +226,15 @@ if not errorlevel 1 (
 )
 
 if exist "%BACKUP%" del /f /q "%BACKUP%" >nul 2>nul
-move /y "%TARGET%" "%BACKUP%" >nul
-copy /y "%NEWEXE%" "%TARGET%" >nul
+move /y "%CURRENT%" "%BACKUP%" >nul
+copy /y "%NEWEXE%" "%UPDATED%" >nul
 if errorlevel 1 (
-  copy /y "%BACKUP%" "%TARGET%" >nul 2>nul
-  start "" "%TARGET%"
+  copy /y "%BACKUP%" "%CURRENT%" >nul 2>nul
+  start "" "%CURRENT%"
   exit /b 1
 )
 
-start "" "%TARGET%"
+start "" "%UPDATED%"
 timeout /t 2 /nobreak >nul
 del /f /q "%BACKUP%" >nul 2>nul
 del /f /q "%NEWEXE%" >nul 2>nul
