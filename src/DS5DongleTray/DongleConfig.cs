@@ -18,6 +18,17 @@ internal sealed record DongleConfig(
 
     public bool IsSupported => ConfigVersion == SupportedConfigVersion;
 
+    public static DongleConfig WebConfigDefault => new(
+        SupportedConfigVersion,
+        1.0f,
+        0.0f,
+        10,
+        false,
+        false,
+        0,
+        64,
+        2);
+
     public static DongleConfig FromFeaturePayload(byte[] report)
     {
         const int payloadOffset = 1;

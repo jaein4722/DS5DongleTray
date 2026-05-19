@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Net.Http.Headers;
-using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Text.Json;
 
 namespace DS5DongleTray;
 
@@ -100,6 +100,7 @@ internal sealed class FirmwareUpdater
     public async Task<FirmwareUpdateResult> DownloadAndInstallLatestAsync(FirmwareReleaseChannel channel, IProgress<string>? progress = null, CancellationToken cancellationToken = default)
     {
         var download = await DownloadLatestAsync(channel, progress, cancellationToken).ConfigureAwait(false);
+
         var destination = await InstallFirmwareFileAsync(download.DownloadPath, download.Release.Asset.Name, progress, cancellationToken).ConfigureAwait(false);
         return new FirmwareUpdateResult(download.Release, destination);
     }
@@ -136,23 +137,6 @@ internal sealed class FirmwareUpdater
         progress?.Report("UF2 bootloader drive detected.");
     }
 
-    public static void OpenReleasePage(FirmwareRelease release)
-    {
-        Process.Start(new ProcessStartInfo(release.HtmlUrl) { UseShellExecute = true });
-    }
-
-    public static string GetRepository(FirmwareReleaseChannel channel)
-    {
-        return channel == FirmwareReleaseChannel.Custom ? CustomRepository : OfficialRepository;
-    }
-
-    public static FirmwareReleaseChannel GetChannelForFirmware(string? firmwareVersion)
-    {
-        return firmwareVersion?.Contains("-custom", StringComparison.OrdinalIgnoreCase) == true
-            ? FirmwareReleaseChannel.Custom
-            : FirmwareReleaseChannel.Official;
-    }
-
     private async Task<string> InstallFirmwareFileAsync(string firmwarePath, string fileName, IProgress<string>? progress, CancellationToken cancellationToken)
     {
         progress?.Report("Requesting UF2 bootloader...");
@@ -170,6 +154,23 @@ internal sealed class FirmwareUpdater
         await Task.Delay(TimeSpan.FromSeconds(3), cancellationToken).ConfigureAwait(false);
 
         return destination;
+    }
+
+    public static void OpenReleasePage(FirmwareRelease release)
+    {
+        Process.Start(new ProcessStartInfo(release.HtmlUrl) { UseShellExecute = true });
+    }
+
+    public static string GetRepository(FirmwareReleaseChannel channel)
+    {
+        return channel == FirmwareReleaseChannel.Custom ? CustomRepository : OfficialRepository;
+    }
+
+    public static FirmwareReleaseChannel GetChannelForFirmware(string? firmwareVersion)
+    {
+        return firmwareVersion?.Contains("-custom", StringComparison.OrdinalIgnoreCase) == true
+            ? FirmwareReleaseChannel.Custom
+            : FirmwareReleaseChannel.Official;
     }
 
     private static FirmwareAsset? SelectStandardFirmwareAsset(IEnumerable<FirmwareAsset> assets)
@@ -196,8 +197,12 @@ internal sealed class FirmwareUpdater
 
     private static string GetDownloadPath(FirmwareRelease release)
     {
-        var downloads = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
-        var directory = Directory.Exists(downloads) ? downloads : Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+        var downloads = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            "Downloads");
+        var directory = Directory.Exists(downloads)
+            ? downloads
+            : Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
         return Path.Combine(directory, $"DS5Dongle-{release.Tag}-{release.Asset.Name}");
     }
 
@@ -269,11 +274,6 @@ internal sealed record FirmwareAsset(string Name, string DownloadUrl);
 internal sealed record FirmwareDownloadResult(FirmwareRelease Release, string DownloadPath);
 
 internal sealed record FirmwareUpdateResult(FirmwareRelease Release, string DestinationPath);
-
-internal sealed record UpdateCheckResult(FirmwareVersionStatus Status, string? CurrentVersion, FirmwareRelease? LatestRelease)
-{
-    public bool IsUpdateAvailable => Status == FirmwareVersionStatus.UpdateAvailable;
-}
 
 internal enum FirmwareReleaseChannel
 {

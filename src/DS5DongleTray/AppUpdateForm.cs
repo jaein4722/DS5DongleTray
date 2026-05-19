@@ -6,15 +6,15 @@ namespace DS5DongleTray;
 internal sealed class AppUpdateForm : Form
 {
     private readonly AppUpdater updater;
-    private readonly Label currentLabel;
-    private readonly Label releaseLabel;
+    private readonly Label currentVersionLabel;
+    private readonly Label latestVersionLabel;
     private readonly Label assetLabel;
     private readonly Label statusLabel;
     private readonly Button updateButton;
     private readonly Button downloadButton;
     private readonly Button openReleaseButton;
     private AppRelease? latestRelease;
-    private bool updateAvailable;
+    private FirmwareVersionStatus latestStatus = FirmwareVersionStatus.Unknown;
 
     public AppUpdateForm(AppUpdater updater)
     {
@@ -26,17 +26,17 @@ internal sealed class AppUpdateForm : Form
         MinimizeBox = false;
         MaximizeBox = false;
         ShowInTaskbar = true;
-        ClientSize = new Size(520, 238);
+        ClientSize = new Size(520, 250);
 
-        currentLabel = NewLabel($"Current app: {AppUpdater.CurrentVersion}", new Point(16, 18), new Size(488, 24));
-        releaseLabel = NewLabel("Latest release: checking...", new Point(16, 48), new Size(488, 24));
-        assetLabel = NewLabel("App asset: checking...", new Point(16, 78), new Size(488, 24));
-        statusLabel = NewLabel("", new Point(16, 116), new Size(488, 42));
+        currentVersionLabel = NewLabel($"Current app: {AppUpdater.CurrentVersion}", new Point(16, 18), new Size(488, 24));
+        latestVersionLabel = NewLabel("Latest release: checking...", new Point(16, 48), new Size(488, 24));
+        assetLabel = NewLabel("Asset: checking...", new Point(16, 78), new Size(488, 24));
+        statusLabel = NewLabel("", new Point(16, 118), new Size(488, 50));
 
-        updateButton = new Button { Text = "Update App", Location = new Point(16, 174), Size = new Size(112, 30), Enabled = false };
-        downloadButton = new Button { Text = "Download", Location = new Point(136, 174), Size = new Size(112, 30), Enabled = false };
-        openReleaseButton = new Button { Text = "Open Release", Location = new Point(256, 174), Size = new Size(112, 30), Enabled = false };
-        var closeButton = new Button { Text = "Close", Location = new Point(424, 174), Size = new Size(80, 30) };
+        updateButton = new Button { Text = "Update App", Location = new Point(16, 178), Size = new Size(104, 30), Enabled = false };
+        downloadButton = new Button { Text = "Download", Location = new Point(128, 178), Size = new Size(92, 30), Enabled = false };
+        openReleaseButton = new Button { Text = "Open Release", Location = new Point(228, 178), Size = new Size(108, 30), Enabled = false };
+        var closeButton = new Button { Text = "Close", Location = new Point(424, 204), Size = new Size(80, 30) };
 
         updateButton.Click += async (_, _) => await UpdateAppAsync();
         downloadButton.Click += async (_, _) => await DownloadAppAsync();
@@ -50,8 +50,8 @@ internal sealed class AppUpdateForm : Form
         closeButton.Click += (_, _) => Close();
 
         Controls.AddRange([
-            currentLabel,
-            releaseLabel,
+            currentVersionLabel,
+            latestVersionLabel,
             assetLabel,
             statusLabel,
             updateButton,
@@ -59,6 +59,7 @@ internal sealed class AppUpdateForm : Form
             openReleaseButton,
             closeButton
         ]);
+
         Shown += async (_, _) => await CheckLatestAsync();
     }
 
@@ -69,25 +70,22 @@ internal sealed class AppUpdateForm : Form
         {
             var result = await updater.CheckForUpdateAsync();
             latestRelease = result.LatestRelease;
-            updateAvailable = result.IsUpdateAvailable;
-            currentLabel.Text = $"Current app: {result.CurrentVersion}";
-            releaseLabel.Text = $"Latest release: {latestRelease.Tag}";
-            assetLabel.Text = $"App asset: {latestRelease.Asset.Name}";
+            latestStatus = result.Status;
 
-            if (updateAvailable)
-            {
-                statusLabel.Text = "App update available.";
-            }
-            else
-            {
-                statusLabel.Text = "DS5DongleTray is already up to date.";
-            }
+            latestVersionLabel.Text = $"Latest release: {latestRelease.Tag}";
+            assetLabel.Text = $"Asset: {latestRelease.Asset.Name}";
+            statusLabel.Text = latestStatus == FirmwareVersionStatus.UpdateAvailable
+                ? AppUpdater.CanSelfUpdate(out var reason)
+                    ? "Update available. The app will restart after updating."
+                    : $"Update available. Automatic replacement is unavailable: {reason}"
+                : "Current app is already up to date.";
+
+            openReleaseButton.Enabled = true;
         }
         catch (Exception ex)
         {
-            latestRelease = null;
-            updateAvailable = false;
             statusLabel.Text = $"Could not check app releases: {ex.Message}";
+            latestStatus = FirmwareVersionStatus.Unknown;
         }
         finally
         {
@@ -114,7 +112,6 @@ internal sealed class AppUpdateForm : Form
             "Update App",
             MessageBoxButtons.OKCancel,
             MessageBoxIcon.Question);
-
         if (confirm != DialogResult.OK)
         {
             return;
@@ -122,11 +119,12 @@ internal sealed class AppUpdateForm : Form
 
         SetBusy(true);
         var progress = new Progress<string>(message => statusLabel.Text = message);
+
         try
         {
-            var result = await updater.DownloadLatestAsync(latestRelease, useTempDirectory: true, progress);
-            statusLabel.Text = "Restarting to complete update...";
-            AppUpdater.StartSelfUpdate(result.DownloadPath);
+            var download = await updater.DownloadLatestAsync(latestRelease, useTempDirectory: true, progress);
+            statusLabel.Text = "Starting updater...";
+            AppUpdater.StartSelfUpdate(download.DownloadPath);
             Application.Exit();
         }
         catch (Exception ex)
@@ -146,10 +144,11 @@ internal sealed class AppUpdateForm : Form
 
         SetBusy(true);
         var progress = new Progress<string>(message => statusLabel.Text = message);
+
         try
         {
-            var result = await updater.DownloadLatestAsync(latestRelease, useTempDirectory: false, progress);
-            statusLabel.Text = $"Downloaded to {result.DownloadPath}.";
+            var download = await updater.DownloadLatestAsync(latestRelease, useTempDirectory: false, progress);
+            statusLabel.Text = $"Downloaded to {download.DownloadPath}.";
         }
         catch (Exception ex)
         {
@@ -164,8 +163,9 @@ internal sealed class AppUpdateForm : Form
 
     private void SetBusy(bool busy)
     {
-        updateButton.Enabled = !busy && latestRelease is not null && updateAvailable;
-        downloadButton.Enabled = !busy && latestRelease is not null;
+        var updateAvailable = latestRelease is not null && latestStatus == FirmwareVersionStatus.UpdateAvailable;
+        updateButton.Enabled = !busy && updateAvailable && AppUpdater.CanSelfUpdate(out _);
+        downloadButton.Enabled = !busy && updateAvailable;
         openReleaseButton.Enabled = !busy && latestRelease is not null;
     }
 

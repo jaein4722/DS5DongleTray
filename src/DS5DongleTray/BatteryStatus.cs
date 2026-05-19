@@ -6,13 +6,14 @@ internal sealed record BatteryStatus(
     byte PowerState,
     bool IsCharging,
     bool IsUsbPowered,
+    bool IsPsButtonPressed,
     bool IsConnected,
     bool IsFresh,
     uint LastReportAgeMs)
 {
     public bool HasKnownLevel => IsConnected && IsFresh && LevelRaw <= 10 && Percent <= 100;
 
-    public string StateName => PowerStateNames.GetName(PowerState, Percent, IsUsbPowered, IsConnected, IsFresh);
+    public string StateName => PowerStateNames.GetName(PowerState, IsConnected, IsFresh);
 
     public string DisplayText
     {
@@ -56,20 +57,28 @@ internal sealed record BatteryStatus(
         var battery = report[batteryByteIndex];
         var levelRaw = (byte)(battery & 0x0F);
         var powerState = (byte)((battery >> 4) & 0x0F);
-        var percent = levelRaw <= 10 ? (byte)(levelRaw * 10) : (byte)0xFF;
+        var percent = powerState == powerStateComplete
+            ? (byte)100
+            : levelRaw <= 10 ? (byte)(levelRaw * 10) : (byte)0xFF;
         var flags = report[flagsByteIndex];
         var usbPowered = (flags & (pluggedUsbPowerMask | usbPowerOnBluetoothMask)) != 0;
-        var isCharging = powerState == powerStateCharging ||
-            (powerState == powerStateComplete && percent < 100);
+        var psButtonPressed = IsPsButtonPressedFromInputReport(report, bytesRead);
 
         return new BatteryStatus(
             levelRaw,
             percent,
             powerState,
-            isCharging,
+            powerState == powerStateCharging,
             usbPowered,
+            psButtonPressed,
             true,
             true,
             0);
+    }
+
+    private static bool IsPsButtonPressedFromInputReport(byte[] report, int bytesRead)
+    {
+        var index = bytesRead is 64 or 79 ? 10 : 11;
+        return bytesRead > index && report[index] == 0x01;
     }
 }

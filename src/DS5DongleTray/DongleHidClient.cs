@@ -19,6 +19,7 @@ internal sealed class DongleHidClient
     private const byte CommandSaveConfig = 0x02;
     private const byte CommandReconnectUsb = 0x03;
     private const byte CommandEnterBootloader = 0x04;
+    private string? lastDevicePath;
 
     private static readonly (int Vid, int Pid)[] CandidateIds =
     [
@@ -55,6 +56,7 @@ internal sealed class DongleHidClient
                         continue;
                     }
 
+                    lastDevicePath = hidDevice.DevicePath;
                     var rssi = TryReadRssi(stream);
                     var battery = TryReadBatteryFromInput(hidDevice, stream);
                     var config = TryReadConfig(stream, out var configUnsupported);
@@ -78,6 +80,7 @@ internal sealed class DongleHidClient
             }
         }
 
+        lastDevicePath = null;
         return new DongleSnapshot { DeviceFound = false };
     }
 
@@ -87,6 +90,16 @@ internal sealed class DongleHidClient
         {
             using var stream = OpenDongleStream();
             return TryReadConfig(stream, out _);
+        });
+    }
+
+    public Task<BatteryStatus?> ReadInputBatteryAsync()
+    {
+        return Task.Run(() =>
+        {
+            var opened = OpenInputDeviceStream();
+            using var stream = opened.Stream;
+            return TryReadBatteryFromInput(opened.Device, stream, 30, 2, log: false);
         });
     }
 
@@ -140,7 +153,46 @@ internal sealed class DongleHidClient
         }
     }
 
-    private static HidStream OpenDongleStream()
+    private HidStream OpenDongleStream()
+    {
+        return OpenDongleDeviceStream().Stream;
+    }
+
+    private (HidDevice Device, HidStream Stream) OpenInputDeviceStream()
+    {
+        var cachedDevice = FindCachedDevice();
+        if (cachedDevice is not null)
+        {
+            try
+            {
+                if (cachedDevice.TryOpen(out var stream))
+                {
+                    stream.ReadTimeout = 100;
+                    stream.WriteTimeout = 100;
+                    return (cachedDevice, stream);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"Open cached input device failed: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
+        return OpenDongleDeviceStream();
+    }
+
+    private HidDevice? FindCachedDevice()
+    {
+        if (string.IsNullOrWhiteSpace(lastDevicePath))
+        {
+            return null;
+        }
+
+        return EnumerateCandidates()
+            .FirstOrDefault(device => string.Equals(device.DevicePath, lastDevicePath, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private (HidDevice Device, HidStream Stream) OpenDongleDeviceStream()
     {
         foreach (var hidDevice in EnumerateCandidates())
         {
@@ -157,7 +209,8 @@ internal sealed class DongleHidClient
                 var firmware = TryReadFirmware(stream);
                 if (!string.IsNullOrWhiteSpace(firmware))
                 {
-                    return stream;
+                    lastDevicePath = hidDevice.DevicePath;
+                    return (hidDevice, stream);
                 }
 
                 stream.Dispose();
@@ -205,15 +258,20 @@ internal sealed class DongleHidClient
         }
     }
 
-    private static BatteryStatus? TryReadBatteryFromInput(HidDevice hidDevice, HidStream stream)
+    private static BatteryStatus? TryReadBatteryFromInput(
+        HidDevice hidDevice,
+        HidStream stream,
+        int readTimeoutMs = InputReportReadTimeoutMs,
+        int attempts = InputReportReadAttempts,
+        bool log = true)
     {
         var oldReadTimeout = stream.ReadTimeout;
         try
         {
-            stream.ReadTimeout = InputReportReadTimeoutMs;
+            stream.ReadTimeout = readTimeoutMs;
             var reportLength = Math.Max(hidDevice.GetMaxInputReportLength(), FeatureReportLength);
 
-            for (var attempt = 0; attempt < InputReportReadAttempts; attempt++)
+            for (var attempt = 0; attempt < attempts; attempt++)
             {
                 var report = new byte[reportLength];
                 var bytesRead = stream.Read(report);
@@ -224,20 +282,32 @@ internal sealed class DongleHidClient
 
                 if (report[0] != 0x01)
                 {
-                    Log($"Skipped input report 0x{report[0]:X2} while looking for battery state.");
+                    if (log)
+                    {
+                        Log($"Skipped input report 0x{report[0]:X2} while looking for battery state.");
+                    }
                     continue;
                 }
 
                 var battery = BatteryStatus.FromInputReport(report, bytesRead);
-                Log($"Input battery read succeeded: bytes={bytesRead}, level={battery.LevelRaw}, percent={battery.Percent}, state=0x{battery.PowerState:X2}, usbPower={battery.IsUsbPowered}.");
+                if (log)
+                {
+                    Log($"Input battery read succeeded: bytes={bytesRead}, level={battery.LevelRaw}, percent={battery.Percent}, state=0x{battery.PowerState:X2}, usbPower={battery.IsUsbPowered}.");
+                }
                 return battery;
             }
 
-            Log("No 0x01 input report was observed while looking for battery state.");
+            if (log)
+            {
+                Log("No 0x01 input report was observed while looking for battery state.");
+            }
         }
         catch (Exception ex)
         {
-            Log($"Input battery read failed: {ex.GetType().Name}: {ex.Message}");
+            if (log)
+            {
+                Log($"Input battery read failed: {ex.GetType().Name}: {ex.Message}");
+            }
         }
         finally
         {

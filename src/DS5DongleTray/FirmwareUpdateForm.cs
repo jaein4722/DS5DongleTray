@@ -6,8 +6,8 @@ namespace DS5DongleTray;
 internal sealed class FirmwareUpdateForm : Form
 {
     private readonly FirmwareUpdater updater;
-    private readonly Label releaseLabel;
     private readonly Label currentFirmwareLabel;
+    private readonly Label releaseLabel;
     private readonly Label assetLabel;
     private readonly Label statusLabel;
     private readonly TextBox firmwarePathTextBox;

@@ -9,7 +9,7 @@ namespace DS5DongleTray;
 
 internal sealed class AppUpdater
 {
-    private const string LatestReleaseApiUrl = "https://api.github.com/repos/jaein4722/DS5DongleTray/releases/latest";
+    private const string Repository = "jaein4722/DS5DongleTray";
     private readonly HttpClient httpClient = new();
 
     public AppUpdater()
@@ -25,9 +25,12 @@ internal sealed class AppUpdater
             var version = Assembly.GetExecutingAssembly()
                 .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
                 .InformationalVersion;
-            return string.IsNullOrWhiteSpace(version)
-                ? Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "unknown"
-                : version.Split('+')[0];
+            if (!string.IsNullOrWhiteSpace(version))
+            {
+                return version.Split('+')[0];
+            }
+
+            return Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "unknown";
         }
     }
 
@@ -40,27 +43,33 @@ internal sealed class AppUpdater
 
     public async Task<AppRelease> GetLatestReleaseAsync(CancellationToken cancellationToken = default)
     {
-        using var stream = await httpClient.GetStreamAsync(LatestReleaseApiUrl, cancellationToken).ConfigureAwait(false);
+        using var stream = await httpClient
+            .GetStreamAsync($"https://api.github.com/repos/{Repository}/releases/latest", cancellationToken)
+            .ConfigureAwait(false);
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
         var root = document.RootElement;
         var tag = root.GetProperty("tag_name").GetString() ?? "latest";
-        var htmlUrl = root.GetProperty("html_url").GetString() ?? "https://github.com/jaein4722/DS5DongleTray/releases";
+        var htmlUrl = root.GetProperty("html_url").GetString() ?? $"https://github.com/{Repository}/releases";
         var assets = root.GetProperty("assets").EnumerateArray()
             .Select(asset => new AppAsset(
                 asset.GetProperty("name").GetString() ?? "",
                 asset.GetProperty("browser_download_url").GetString() ?? ""))
             .ToList();
 
-        var exeAsset = SelectExeAsset(assets)
-            ?? throw new InvalidOperationException("Latest release does not contain a matching Windows x64 exe asset.");
-        var shaAsset = assets.FirstOrDefault(asset => asset.Name.Equals($"{exeAsset.Name}.sha256", StringComparison.OrdinalIgnoreCase));
+        var exeAsset = assets.FirstOrDefault(asset =>
+            asset.Name.EndsWith("-win-x64.exe", StringComparison.OrdinalIgnoreCase) ||
+            asset.Name.Equals("DS5DongleTray.exe", StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidOperationException("Latest release does not contain a Windows x64 .exe asset.");
+
+        var shaAsset = assets.FirstOrDefault(asset =>
+            asset.Name.Equals($"{exeAsset.Name}.sha256", StringComparison.OrdinalIgnoreCase));
 
         return new AppRelease(tag, htmlUrl, exeAsset, shaAsset);
     }
 
     public async Task<AppDownloadResult> DownloadLatestAsync(AppRelease release, bool useTempDirectory, IProgress<string>? progress = null, CancellationToken cancellationToken = default)
     {
-        var directory = useTempDirectory ? Path.GetTempPath() : DownloadsDirectory();
+        var directory = useTempDirectory ? Path.GetTempPath() : GetDownloadsDirectory();
         var destination = Path.Combine(directory, release.Asset.Name);
         progress?.Report($"Downloading {release.Asset.Name}...");
         await DownloadFileAsync(release.Asset.DownloadUrl, destination, cancellationToken).ConfigureAwait(false);
@@ -83,6 +92,14 @@ internal sealed class AppUpdater
         if (string.IsNullOrWhiteSpace(path) || !path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
         {
             reason = "The app is not running as a standalone exe.";
+            return false;
+        }
+
+        var fileName = Path.GetFileName(path);
+        if (!fileName.Equals("DS5DongleTray.exe", StringComparison.OrdinalIgnoreCase) &&
+            !fileName.StartsWith("DS5DongleTray-", StringComparison.OrdinalIgnoreCase))
+        {
+            reason = $"Unexpected executable name: {fileName}";
             return false;
         }
 
@@ -113,7 +130,8 @@ internal sealed class AppUpdater
         var target = Environment.ProcessPath
             ?? throw new InvalidOperationException("The current executable path could not be determined.");
         var scriptPath = Path.Combine(Path.GetTempPath(), $"DS5DongleTrayUpdate-{Guid.NewGuid():N}.cmd");
-        File.WriteAllText(scriptPath, BuildUpdateScript(Environment.ProcessId, target, newExePath), Encoding.ASCII);
+        var pid = Environment.ProcessId;
+        File.WriteAllText(scriptPath, BuildUpdateScript(pid, target, newExePath), Encoding.ASCII);
 
         Process.Start(new ProcessStartInfo
         {
@@ -129,25 +147,22 @@ internal sealed class AppUpdater
         Process.Start(new ProcessStartInfo(release.HtmlUrl) { UseShellExecute = true });
     }
 
-    private static AppVersionStatus GetVersionStatus(string currentVersion, string latestTag)
+    public static FirmwareVersionStatus GetVersionStatus(string currentVersion, string latestTag)
     {
         var current = NormalizeVersion(currentVersion);
         var latest = NormalizeVersion(latestTag);
         if (string.Equals(current, latest, StringComparison.OrdinalIgnoreCase))
         {
-            return AppVersionStatus.UpToDate;
+            return FirmwareVersionStatus.UpToDate;
         }
 
-        return Version.TryParse(current, out var currentParsed) &&
-            Version.TryParse(latest, out var latestParsed) &&
-            currentParsed >= latestParsed
-                ? AppVersionStatus.UpToDate
-                : AppVersionStatus.UpdateAvailable;
-    }
+        if (Version.TryParse(current, out var currentParsed) &&
+            Version.TryParse(latest, out var latestParsed))
+        {
+            return latestParsed > currentParsed ? FirmwareVersionStatus.UpdateAvailable : FirmwareVersionStatus.UpToDate;
+        }
 
-    private static AppAsset? SelectExeAsset(IEnumerable<AppAsset> assets)
-    {
-        return assets.FirstOrDefault(asset => asset.Name.EndsWith("-win-x64.exe", StringComparison.OrdinalIgnoreCase));
+        return FirmwareVersionStatus.UpdateAvailable;
     }
 
     private async Task DownloadFileAsync(string url, string path, CancellationToken cancellationToken)
@@ -177,7 +192,7 @@ internal sealed class AppUpdater
         }
     }
 
-    private static string DownloadsDirectory()
+    private static string GetDownloadsDirectory()
     {
         var downloads = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
         return Directory.Exists(downloads) ? downloads : Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
@@ -224,9 +239,12 @@ del /f /q "%~f0" >nul 2>nul
     }
 }
 
-internal sealed record AppUpdateCheckResult(AppVersionStatus Status, string CurrentVersion, AppRelease LatestRelease)
+internal sealed record AppUpdateCheckResult(
+    FirmwareVersionStatus Status,
+    string CurrentVersion,
+    AppRelease LatestRelease)
 {
-    public bool IsUpdateAvailable => Status == AppVersionStatus.UpdateAvailable;
+    public bool IsUpdateAvailable => Status == FirmwareVersionStatus.UpdateAvailable;
 }
 
 internal sealed record AppRelease(string Tag, string HtmlUrl, AppAsset Asset, AppAsset? Sha256Asset);
@@ -234,9 +252,3 @@ internal sealed record AppRelease(string Tag, string HtmlUrl, AppAsset Asset, Ap
 internal sealed record AppAsset(string Name, string DownloadUrl);
 
 internal sealed record AppDownloadResult(AppRelease Release, string DownloadPath);
-
-internal enum AppVersionStatus
-{
-    UpToDate,
-    UpdateAvailable
-}

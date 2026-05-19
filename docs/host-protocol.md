@@ -18,16 +18,22 @@ Battery status is parsed from the normal controller input report:
 ```c
 uint8_t battery = input_report[52];
 uint8_t level_raw = battery & 0x0F;          // 0..10
-uint8_t percent = min(level_raw, 10) * 10;   // 0..100
 uint8_t power_state = (battery >> 4) & 0x0F;
+uint8_t percent = power_state == 0x02
+    ? 100
+    : min(level_raw, 10) * 10;               // 0..100, 10% steps
 uint8_t flags = input_report[53];            // USB power flags are used to disambiguate 0x02
 ```
+
+The app follows Sony's upstream Linux `hid-playstation` interpretation for the raw fields: the lower nibble is a 0..10 battery level and `power_state == 0x02` means full/complete regardless of the raw level. DS5DongleTray intentionally displays discharging/charging values in coarse 10% steps instead of Linux's midpoint presentation.
+
+Overlay triggers also watch the normal input report at 100 ms intervals. The latest input report battery state is cached for faster tray updates, while firmware/config/RSSI feature reports stay on the slower management polling path.
 
 Power state names:
 
 - `0x00`: Discharging
 - `0x01`: Charging
-- `0x02`: Full
+- `0x02`: Complete
 - `0x0A`: Abnormal Voltage
 - `0x0B`: Abnormal Temperature
 - `0x0F`: Charging Error
@@ -54,4 +60,4 @@ uint8_t controller_mode;         // 0: DS5, 1: DSE, 2: Auto
 
 To apply config immediately, send `0xF6` with payload byte `0x01` followed by the packed config body. To persist the current config to flash, send `0xF6` with payload byte `0x02`. To reconnect USB, send `0xF6` with payload byte `0x03`.
 
-The custom firmware build flavor can also use `0xF6 + 0x04` to enter UF2 bootloader mode. This is not part of the upstream/original firmware path.
+Firmware versions containing `-custom` are treated as supporting `0xF6 + 0x04` to enter UF2 bootloader mode. This is not part of the upstream/original firmware path.

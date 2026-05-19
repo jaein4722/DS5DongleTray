@@ -19,7 +19,24 @@ internal static class Program
 
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
-        Application.Run(new TrayApplicationContext(new DongleHidClient()));
+        Application.ThreadException += (_, ex) => ShowFatalError(ex.Exception);
+        AppDomain.CurrentDomain.UnhandledException += (_, ex) =>
+        {
+            if (ex.ExceptionObject is Exception exception)
+            {
+                ShowFatalError(exception);
+            }
+        };
+        Application.Run(new TrayApplicationContext(new DongleHidClient(), AppSettings.Load()));
+    }
+
+    private static void ShowFatalError(Exception exception)
+    {
+        MessageBox.Show(
+            exception.ToString(),
+            "DS5DongleTray Error",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Error);
     }
 }
 

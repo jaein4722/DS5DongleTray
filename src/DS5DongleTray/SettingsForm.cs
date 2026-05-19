@@ -5,11 +5,30 @@ namespace DS5DongleTray;
 
 internal sealed class SettingsForm : Form
 {
+    private const string BuiltInDefaultProfileName = "Default";
+    private static readonly IReadOnlyDictionary<string, DongleConfig> BuiltInProfiles =
+        new Dictionary<string, DongleConfig>(StringComparer.OrdinalIgnoreCase)
+        {
+            [BuiltInDefaultProfileName] = DongleConfig.WebConfigDefault
+        };
+
     private readonly DongleHidClient client;
+    private readonly AppSettings appSettings;
     private readonly SliderInput hapticsGainInput;
     private readonly SliderInput speakerVolumeInput;
     private readonly SliderInput inactiveTimeInput;
     private readonly SliderInput audioBufferInput;
+    private readonly CheckBox overlayLowBatteryInput;
+    private readonly CheckBox overlayPsButtonInput;
+    private readonly CheckBox overlayChargingChangedInput;
+    private readonly CheckBox overlayTrayLeftClickInput;
+    private readonly NumericUpDown overlayLowBatteryThresholdInput;
+    private readonly NumericUpDown overlayDisplaySecondsInput;
+    private readonly CheckBox startWithWindowsInput;
+    private readonly CheckBox automaticUpdateCheckInput;
+    private readonly CheckBox automaticAppUpdateCheckInput;
+    private readonly Label startupStatusLabel;
+    private readonly ComboBox profileInput;
     private readonly CheckBox disableInactiveDisconnectInput;
     private readonly CheckBox disablePicoLedInput;
     private readonly ComboBox pollingRateInput;
@@ -18,18 +37,20 @@ internal sealed class SettingsForm : Form
     private DongleConfig? currentConfig;
     private DongleConfig? lastSavedConfig;
     private bool loading;
+    private bool loadingOverlaySettings;
 
-    public SettingsForm(DongleHidClient client)
+    public SettingsForm(DongleHidClient client, AppSettings appSettings)
     {
         this.client = client;
+        this.appSettings = appSettings;
 
         Text = "DS5Dongle Settings";
         FormBorderStyle = FormBorderStyle.FixedDialog;
         StartPosition = FormStartPosition.CenterScreen;
         MinimizeBox = false;
         MaximizeBox = false;
-        ShowInTaskbar = false;
-        ClientSize = new Size(640, 458);
+        ShowInTaskbar = true;
+        ClientSize = new Size(664, 568);
 
         hapticsGainInput = new SliderInput("Haptics gain", 1.00m, 2.00m, 0.01m, 2);
         speakerVolumeInput = new SliderInput("Speaker volume (%)", 0m, 100m, 1m, 0);
@@ -39,6 +60,31 @@ internal sealed class SettingsForm : Form
         disablePicoLedInput = new CheckBox { Text = "Disable Pico LED", AutoSize = true };
         pollingRateInput = NewComboBox(["250 Hz", "500 Hz", "Real-time"]);
         controllerModeInput = NewComboBox(["DualSense", "DualSense Edge", "Auto"]);
+
+        overlayLowBatteryInput = new CheckBox { Text = "Show overlay when battery is low", AutoSize = true };
+        overlayPsButtonInput = new CheckBox { Text = "Show overlay when PS button is pressed", AutoSize = true };
+        overlayChargingChangedInput = new CheckBox { Text = "Show overlay when charging state changes", AutoSize = true };
+        overlayTrayLeftClickInput = new CheckBox { Text = "Show overlay on tray icon left-click", AutoSize = true };
+        overlayLowBatteryThresholdInput = NewNumericInput(10, 50, 10);
+        overlayDisplaySecondsInput = NewNumericInput(1, 10, 1);
+        startWithWindowsInput = new CheckBox { Text = "Start DS5DongleTray when I sign in to Windows", AutoSize = true };
+        automaticUpdateCheckInput = new CheckBox { Text = "Check for firmware updates automatically", AutoSize = true };
+        automaticAppUpdateCheckInput = new CheckBox { Text = "Check for app updates automatically", AutoSize = true };
+        startupStatusLabel = new Label
+        {
+            AutoSize = false,
+            Location = new Point(20, 118),
+            Size = new Size(570, 64),
+            TextAlign = ContentAlignment.MiddleLeft
+        };
+        profileInput = NewComboBox([]);
+        profileInput.DropDownStyle = ComboBoxStyle.DropDown;
+
+        var tabs = new TabControl { Location = new Point(12, 12), Size = new Size(640, 504) };
+        var generalPage = new TabPage("General");
+        var firmwarePage = new TabPage("Firmware");
+        var overlayPage = new TabPage("Overlay");
+        tabs.TabPages.AddRange([generalPage, firmwarePage, overlayPage]);
 
         var feedbackGroup = NewGroup("Feedback output", new Point(16, 16), new Size(296, 190));
         hapticsGainInput.Location = new Point(14, 28);
@@ -62,40 +108,297 @@ internal sealed class SettingsForm : Form
         controllerModeInput.Location = new Point(140, 24);
         compatibilityGroup.Controls.AddRange([controllerLabel, controllerModeInput]);
 
-        var refreshButton = new Button { Text = "Refresh", Location = new Point(16, 348), Size = new Size(76, 30) };
-        var applyButton = new Button { Text = "Apply", Location = new Point(98, 348), Size = new Size(76, 30) };
-        var saveButton = new Button { Text = "Save", Location = new Point(180, 348), Size = new Size(76, 30) };
-        var reconnectButton = new Button { Text = "Reconnect USB", Location = new Point(262, 348), Size = new Size(112, 30) };
-        var closeButton = new Button { Text = "Close", Location = new Point(548, 412), Size = new Size(76, 30) };
+        var profilesGroup = NewGroup("Profiles", new Point(16, 332), new Size(608, 72));
+        var profileLabel = NewLabel("Preset", new Point(14, 30), new Size(54, 22));
+        profileInput.Location = new Point(72, 28);
+        profileInput.Width = 178;
+        var loadProfileButton = new Button { Text = "Load", Location = new Point(260, 26), Size = new Size(70, 28) };
+        var saveProfileButton = new Button { Text = "Save current", Location = new Point(338, 26), Size = new Size(96, 28) };
+        var deleteProfileButton = new Button { Text = "Delete", Location = new Point(442, 26), Size = new Size(70, 28) };
+        profilesGroup.Controls.AddRange([profileLabel, profileInput, loadProfileButton, saveProfileButton, deleteProfileButton]);
+
+        var refreshButton = new Button { Text = "Refresh", Location = new Point(16, 418), Size = new Size(76, 30) };
+        var applyButton = new Button { Text = "Apply", Location = new Point(98, 418), Size = new Size(76, 30) };
+        var saveButton = new Button { Text = "Save", Location = new Point(180, 418), Size = new Size(76, 30) };
+        var reconnectButton = new Button { Text = "Reconnect USB", Location = new Point(262, 418), Size = new Size(112, 30) };
+        var closeButton = new Button { Text = "Close", Location = new Point(572, 526), Size = new Size(76, 30) };
 
         statusLabel = new Label
         {
             AutoSize = false,
-            Location = new Point(16, 410),
+            Location = new Point(388, 418),
             Size = new Size(520, 30),
             TextAlign = ContentAlignment.MiddleLeft
         };
+
+        BuildGeneralTab(generalPage);
+        BuildOverlayTab(overlayPage);
 
         refreshButton.Click += async (_, _) => await LoadConfigAsync();
         applyButton.Click += async (_, _) => await ApplyConfigAsync();
         saveButton.Click += async (_, _) => await SaveConfigAsync();
         reconnectButton.Click += async (_, _) => await ReconnectUsbAsync();
+        loadProfileButton.Click += (_, _) => LoadSelectedProfile();
+        saveProfileButton.Click += (_, _) => SaveCurrentProfile();
+        deleteProfileButton.Click += (_, _) => DeleteSelectedProfile();
         closeButton.Click += (_, _) => Close();
 
-        Controls.AddRange([
+        firmwarePage.Controls.AddRange([
             feedbackGroup,
             powerGroup,
             performanceGroup,
             compatibilityGroup,
+            profilesGroup,
             refreshButton,
             applyButton,
             saveButton,
             reconnectButton,
-            statusLabel,
-            closeButton
+            statusLabel
         ]);
+        Controls.AddRange([tabs, closeButton]);
+
+        LoadGeneralSettingsToControls();
+        LoadOverlaySettingsToControls();
+        RefreshProfileList();
 
         Shown += async (_, _) => await LoadConfigAsync();
+    }
+
+    private void BuildGeneralTab(Control generalPage)
+    {
+        var startupGroup = NewGroup("Windows startup", new Point(16, 16), new Size(592, 166));
+        startWithWindowsInput.Location = new Point(18, 32);
+        automaticUpdateCheckInput.Location = new Point(18, 64);
+        automaticAppUpdateCheckInput.Location = new Point(18, 94);
+        startupGroup.Controls.AddRange([startWithWindowsInput, automaticUpdateCheckInput, automaticAppUpdateCheckInput, startupStatusLabel]);
+
+        var todoGroup = NewGroup("Planned", new Point(16, 198), new Size(592, 110));
+        var todoLabel = new Label
+        {
+            Text = "TODO: Audio Guard / Audio Check for detecting DS5Dongle speaker and microphone default-device issues.",
+            Location = new Point(18, 34),
+            Size = new Size(552, 44),
+            TextAlign = ContentAlignment.MiddleLeft
+        };
+        todoGroup.Controls.Add(todoLabel);
+
+        startWithWindowsInput.CheckedChanged += (_, _) => SaveGeneralSettingsFromControls();
+        automaticUpdateCheckInput.CheckedChanged += (_, _) => SaveGeneralSettingsFromControls();
+        automaticAppUpdateCheckInput.CheckedChanged += (_, _) => SaveGeneralSettingsFromControls();
+        generalPage.Controls.AddRange([startupGroup, todoGroup]);
+    }
+
+    private void LoadGeneralSettingsToControls()
+    {
+        startWithWindowsInput.Checked = StartupManager.IsEnabled();
+        automaticUpdateCheckInput.Checked = appSettings.UpdateCheck.Enabled;
+        automaticAppUpdateCheckInput.Checked = appSettings.AppUpdateCheck.Enabled;
+        UpdateStartupStatus();
+    }
+
+    private void SaveGeneralSettingsFromControls()
+    {
+        try
+        {
+            StartupManager.SetEnabled(startWithWindowsInput.Checked);
+            appSettings.UpdateCheck.Enabled = automaticUpdateCheckInput.Checked;
+            appSettings.AppUpdateCheck.Enabled = automaticAppUpdateCheckInput.Checked;
+            appSettings.Save();
+            UpdateStartupStatus();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Windows Startup", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            startWithWindowsInput.Checked = StartupManager.IsEnabled();
+            UpdateStartupStatus();
+        }
+    }
+
+    private void UpdateStartupStatus()
+    {
+        startupStatusLabel.Text = startWithWindowsInput.Checked
+            ? $"Enabled for current user.\nCommand: {StartupManager.CurrentCommand()}"
+            : "Disabled. This setting uses the current user's Windows Run registry key and does not require administrator rights.";
+    }
+
+    private void BuildOverlayTab(Control overlayPage)
+    {
+        var triggersGroup = NewGroup("Overlay triggers", new Point(16, 16), new Size(592, 166));
+        overlayLowBatteryInput.Location = new Point(18, 30);
+        overlayPsButtonInput.Location = new Point(18, 62);
+        overlayChargingChangedInput.Location = new Point(18, 94);
+        overlayTrayLeftClickInput.Location = new Point(18, 126);
+        triggersGroup.Controls.AddRange([
+            overlayLowBatteryInput,
+            overlayPsButtonInput,
+            overlayChargingChangedInput,
+            overlayTrayLeftClickInput
+        ]);
+
+        var behaviorGroup = NewGroup("Overlay behavior", new Point(16, 198), new Size(592, 116));
+        var thresholdLabel = NewLabel("Low battery threshold (%)", new Point(18, 32), new Size(180, 22));
+        var durationLabel = NewLabel("Display duration (sec)", new Point(18, 72), new Size(180, 22));
+        overlayLowBatteryThresholdInput.Location = new Point(212, 30);
+        overlayDisplaySecondsInput.Location = new Point(212, 70);
+        behaviorGroup.Controls.AddRange([
+            thresholdLabel,
+            overlayLowBatteryThresholdInput,
+            durationLabel,
+            overlayDisplaySecondsInput
+        ]);
+
+        var hintLabel = new Label
+        {
+            Text = "Overlay settings are saved immediately. PS button overlay uses lightweight input-report polling and can be disabled here.",
+            Location = new Point(20, 334),
+            Size = new Size(580, 48),
+            TextAlign = ContentAlignment.MiddleLeft
+        };
+
+        overlayLowBatteryInput.CheckedChanged += (_, _) => SaveOverlaySettingsFromControls();
+        overlayPsButtonInput.CheckedChanged += (_, _) => SaveOverlaySettingsFromControls();
+        overlayChargingChangedInput.CheckedChanged += (_, _) => SaveOverlaySettingsFromControls();
+        overlayTrayLeftClickInput.CheckedChanged += (_, _) => SaveOverlaySettingsFromControls();
+        overlayLowBatteryThresholdInput.ValueChanged += (_, _) => SaveOverlaySettingsFromControls();
+        overlayDisplaySecondsInput.ValueChanged += (_, _) => SaveOverlaySettingsFromControls();
+
+        overlayPage.Controls.AddRange([triggersGroup, behaviorGroup, hintLabel]);
+    }
+
+    private void LoadOverlaySettingsToControls()
+    {
+        loadingOverlaySettings = true;
+        try
+        {
+            var overlay = appSettings.Overlay;
+            overlayLowBatteryInput.Checked = overlay.ShowOnLowBattery;
+            overlayPsButtonInput.Checked = overlay.ShowOnPsButton;
+            overlayChargingChangedInput.Checked = overlay.ShowOnChargingStateChanged;
+            overlayTrayLeftClickInput.Checked = overlay.ShowOnTrayLeftClick;
+            overlayLowBatteryThresholdInput.Value = overlay.ClampedLowBatteryThreshold;
+            overlayDisplaySecondsInput.Value = overlay.ClampedDisplaySeconds;
+        }
+        finally
+        {
+            loadingOverlaySettings = false;
+        }
+    }
+
+    private void SaveOverlaySettingsFromControls()
+    {
+        if (loadingOverlaySettings)
+        {
+            return;
+        }
+
+        appSettings.Overlay.ShowOnLowBattery = overlayLowBatteryInput.Checked;
+        appSettings.Overlay.ShowOnPsButton = overlayPsButtonInput.Checked;
+        appSettings.Overlay.ShowOnChargingStateChanged = overlayChargingChangedInput.Checked;
+        appSettings.Overlay.ShowOnTrayLeftClick = overlayTrayLeftClickInput.Checked;
+        appSettings.Overlay.LowBatteryThresholdPercent = (int)overlayLowBatteryThresholdInput.Value;
+        appSettings.Overlay.DisplaySeconds = (int)overlayDisplaySecondsInput.Value;
+        appSettings.Save();
+    }
+
+    private void RefreshProfileList(string? selectedName = null)
+    {
+        var names = BuiltInProfiles.Keys
+            .Concat(appSettings.Profiles.Keys.Where(name => !BuiltInProfiles.ContainsKey(name)))
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        profileInput.Items.Clear();
+        profileInput.Items.AddRange(names);
+
+        if (names.Length == 0)
+        {
+            profileInput.SelectedIndex = -1;
+            profileInput.Text = "";
+            return;
+        }
+
+        var index = !string.IsNullOrWhiteSpace(selectedName)
+            ? Array.FindIndex(names, name => string.Equals(name, selectedName, StringComparison.OrdinalIgnoreCase))
+            : 0;
+        profileInput.SelectedIndex = index >= 0 ? index : 0;
+    }
+
+    private void LoadSelectedProfile()
+    {
+        var name = SelectedProfileName();
+        if (string.IsNullOrWhiteSpace(name) || !TryGetProfile(name, out var config))
+        {
+            MessageBox.Show(this, "Select a saved profile first.", "Profiles", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        currentConfig = config;
+        ApplyConfigToControls(config);
+        statusLabel.Text = $"Profile loaded: {name}";
+    }
+
+    private void SaveCurrentProfile()
+    {
+        using var dialog = new ProfileNameForm(SelectedProfileName());
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        ClampInputs();
+        var name = dialog.ProfileName;
+        if (BuiltInProfiles.ContainsKey(name))
+        {
+            MessageBox.Show(this, "Built-in profiles cannot be overwritten. Choose a different name.", "Profiles", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        appSettings.Profiles[name] = ReadConfigFromControls();
+        appSettings.Save();
+        RefreshProfileList(name);
+        statusLabel.Text = $"Profile saved: {name}";
+    }
+
+    private void DeleteSelectedProfile()
+    {
+        var name = SelectedProfileName();
+        if (BuiltInProfiles.ContainsKey(name))
+        {
+            MessageBox.Show(this, "Built-in profiles cannot be deleted.", "Profiles", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(name) || !appSettings.Profiles.ContainsKey(name))
+        {
+            MessageBox.Show(this, "Select a saved profile first.", "Profiles", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var result = MessageBox.Show(
+            this,
+            $"Delete profile '{name}'?",
+            "Delete Profile",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question);
+        if (result != DialogResult.Yes)
+        {
+            return;
+        }
+
+        appSettings.Profiles.Remove(name);
+        appSettings.Save();
+        RefreshProfileList();
+        statusLabel.Text = $"Profile deleted: {name}";
+    }
+
+    private string SelectedProfileName()
+    {
+        return profileInput.SelectedItem as string ?? profileInput.Text.Trim();
+    }
+
+    private bool TryGetProfile(string name, out DongleConfig config)
+    {
+        return BuiltInProfiles.TryGetValue(name, out config!)
+            || appSettings.Profiles.TryGetValue(name, out config!);
     }
 
     private async Task LoadConfigAsync()
@@ -203,16 +506,7 @@ internal sealed class SettingsForm : Form
 
     private DongleConfig ReadConfigFromControls()
     {
-        var baseConfig = currentConfig ?? new DongleConfig(
-            DongleConfig.SupportedConfigVersion,
-            1.0f,
-            -100.0f,
-            30,
-            false,
-            false,
-            0,
-            64,
-            2);
+        var baseConfig = currentConfig ?? DongleConfig.WebConfigDefault;
 
         return baseConfig with
         {
@@ -308,8 +602,23 @@ internal sealed class SettingsForm : Form
             Width = 134
         };
         comboBox.Items.AddRange(items);
-        comboBox.SelectedIndex = 0;
+        if (items.Length > 0)
+        {
+            comboBox.SelectedIndex = 0;
+        }
+
         return comboBox;
+    }
+
+    private static NumericUpDown NewNumericInput(int min, int max, int increment)
+    {
+        return new NumericUpDown
+        {
+            Minimum = min,
+            Maximum = max,
+            Increment = increment,
+            Width = 86
+        };
     }
 
     private static decimal ClampDecimal(decimal value, decimal min, decimal max)
@@ -432,5 +741,57 @@ internal sealed class SliderInput : UserControl
     private decimal TrackToDecimal(int value)
     {
         return Math.Min(Math.Max(min + value / scale, min), max);
+    }
+}
+
+internal sealed class ProfileNameForm : Form
+{
+    private readonly TextBox nameInput;
+
+    public ProfileNameForm(string? currentName)
+    {
+        Text = "Save Profile";
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        StartPosition = FormStartPosition.CenterParent;
+        MinimizeBox = false;
+        MaximizeBox = false;
+        ShowInTaskbar = false;
+        ClientSize = new Size(360, 132);
+
+        var label = new Label
+        {
+            Text = "Profile name",
+            Location = new Point(16, 18),
+            Size = new Size(328, 22),
+            TextAlign = ContentAlignment.MiddleLeft
+        };
+
+        nameInput = new TextBox
+        {
+            Location = new Point(16, 44),
+            Size = new Size(328, 24),
+            Text = currentName ?? ""
+        };
+
+        var okButton = new Button { Text = "Save", Location = new Point(176, 88), Size = new Size(80, 30), DialogResult = DialogResult.OK };
+        var cancelButton = new Button { Text = "Cancel", Location = new Point(264, 88), Size = new Size(80, 30), DialogResult = DialogResult.Cancel };
+
+        AcceptButton = okButton;
+        CancelButton = cancelButton;
+        Controls.AddRange([label, nameInput, okButton, cancelButton]);
+    }
+
+    public string ProfileName => nameInput.Text.Trim();
+
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        if (DialogResult == DialogResult.OK && string.IsNullOrWhiteSpace(ProfileName))
+        {
+            MessageBox.Show(this, "Enter a profile name.", "Save Profile", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            e.Cancel = true;
+            return;
+        }
+
+        base.OnFormClosing(e);
     }
 }
