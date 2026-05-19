@@ -7,7 +7,11 @@ namespace DS5DongleTray;
 internal sealed class TrayApplicationContext : ApplicationContext
 {
     private const string ConfigPageUrl = "https://ds5.awalol.eu.org";
+#if CUSTOM_FIRMWARE
+    private const string GitHubRepositoryUrl = "https://github.com/jaein4722/DS5Dongle";
+#else
     private const string GitHubRepositoryUrl = "https://github.com/awalol/DS5Dongle";
+#endif
     private readonly DongleHidClient client;
     private readonly NotifyIcon notifyIcon;
     private readonly System.Windows.Forms.Timer timer;
@@ -16,6 +20,9 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem rssiItem;
     private readonly ToolStripMenuItem refreshItem;
     private SettingsForm? settingsForm;
+#if CUSTOM_FIRMWARE
+    private FirmwareUpdateForm? firmwareUpdateForm;
+#endif
     private Icon? currentIcon;
     private bool polling;
 
@@ -28,6 +35,9 @@ internal sealed class TrayApplicationContext : ApplicationContext
         rssiItem = new ToolStripMenuItem("RSSI: unknown") { Enabled = false };
         refreshItem = new ToolStripMenuItem("Refresh now", null, async (_, _) => await RefreshAsync());
         var settingsItem = new ToolStripMenuItem("Settings...", null, (_, _) => ShowSettings());
+#if CUSTOM_FIRMWARE
+        var updateFirmwareItem = new ToolStripMenuItem("Update Firmware...", null, (_, _) => ShowFirmwareUpdate());
+#endif
         var openConfigItem = new ToolStripMenuItem("Open Config Page", null, (_, _) => OpenUrl(ConfigPageUrl));
         var openRepoItem = new ToolStripMenuItem("Open GitHub Repository", null, (_, _) => OpenUrl(GitHubRepositoryUrl));
         var exitItem = new ToolStripMenuItem("Exit", null, (_, _) => ExitThread());
@@ -41,6 +51,9 @@ internal sealed class TrayApplicationContext : ApplicationContext
             new ToolStripSeparator(),
             refreshItem,
             settingsItem,
+#if CUSTOM_FIRMWARE
+            updateFirmwareItem,
+#endif
             new ToolStripSeparator(),
             openConfigItem,
             openRepoItem,
@@ -116,6 +129,25 @@ internal sealed class TrayApplicationContext : ApplicationContext
         settingsForm.Show();
     }
 
+#if CUSTOM_FIRMWARE
+    private void ShowFirmwareUpdate()
+    {
+        if (firmwareUpdateForm is { IsDisposed: false })
+        {
+            firmwareUpdateForm.Activate();
+            return;
+        }
+
+        firmwareUpdateForm = new FirmwareUpdateForm(new FirmwareUpdater(client));
+        firmwareUpdateForm.FormClosed += async (_, _) =>
+        {
+            firmwareUpdateForm = null;
+            await RefreshAsync();
+        };
+        firmwareUpdateForm.Show();
+    }
+#endif
+
     private static string TrimTooltip(string text)
     {
         return text.Length <= 63 ? text : text[..63];
@@ -129,6 +161,9 @@ internal sealed class TrayApplicationContext : ApplicationContext
     protected override void ExitThreadCore()
     {
         settingsForm?.Close();
+#if CUSTOM_FIRMWARE
+        firmwareUpdateForm?.Close();
+#endif
         timer.Stop();
         timer.Dispose();
         notifyIcon.Visible = false;

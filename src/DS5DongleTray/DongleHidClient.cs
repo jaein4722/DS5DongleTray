@@ -18,6 +18,9 @@ internal sealed class DongleHidClient
     private const byte CommandApplyConfig = 0x01;
     private const byte CommandSaveConfig = 0x02;
     private const byte CommandReconnectUsb = 0x03;
+#if CUSTOM_FIRMWARE
+    private const byte CommandEnterBootloader = 0x04;
+#endif
 
     private static readonly (int Vid, int Pid)[] CandidateIds =
     [
@@ -110,6 +113,13 @@ internal sealed class DongleHidClient
     {
         return SendCommandAsync(CommandReconnectUsb);
     }
+
+#if CUSTOM_FIRMWARE
+    public Task EnterBootloaderAsync()
+    {
+        return SendCommandAsync(CommandEnterBootloader);
+    }
+#endif
 
     private static IEnumerable<HidDevice> EnumerateCandidates()
     {

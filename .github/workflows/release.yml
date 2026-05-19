@@ -52,6 +52,14 @@ jobs:
     name: Build Windows tray app
     needs: create-release
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - flavor: original
+            define_constants: ""
+          - flavor: custom
+            define_constants: CUSTOM_FIRMWARE
     env:
       PROJECT: src/DS5DongleTray/DS5DongleTray.csproj
       RELEASE_TAG: ${{ needs.create-release.outputs.tag }}
@@ -71,32 +79,39 @@ jobs:
       - name: Restore
         run: dotnet restore $env:PROJECT
 
-      - name: Publish win-x64
+      - name: Publish win-x64 (${{ matrix.flavor }})
         shell: pwsh
         run: |
           $version = $env:RELEASE_TAG.TrimStart('v')
-          dotnet publish $env:PROJECT `
-            -c Release `
-            -r win-x64 `
-            --self-contained false `
-            -p:PublishSingleFile=true `
-            -p:Version=$version `
-            -o publish/win-x64
+          $publishArgs = @(
+            "publish", $env:PROJECT,
+            "-c", "Release",
+            "-r", "win-x64",
+            "--self-contained", "true",
+            "-p:PublishSingleFile=true",
+            "-p:Version=$version",
+            "-o", "publish/${{ matrix.flavor }}"
+          )
+          $defineConstants = "${{ matrix.define_constants }}"
+          if ($defineConstants) {
+            $publishArgs += "-p:DefineConstants=$defineConstants"
+          }
+          dotnet @publishArgs
 
-      - name: Package
+      - name: Package (${{ matrix.flavor }})
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path artifacts | Out-Null
-          $asset = "artifacts/DS5DongleTray-$env:RELEASE_TAG-win-x64.exe"
-          Copy-Item "publish/win-x64/DS5DongleTray.exe" $asset -Force
+          $asset = "artifacts/DS5DongleTray-$env:RELEASE_TAG-${{ matrix.flavor }}-win-x64.exe"
+          Copy-Item "publish/${{ matrix.flavor }}/DS5DongleTray.exe" $asset -Force
           Get-FileHash $asset -Algorithm SHA256 |
             ForEach-Object { "$($_.Hash)  $(Split-Path $asset -Leaf)" } |
-            Set-Content "artifacts/DS5DongleTray-$env:RELEASE_TAG-win-x64.exe.sha256"
+            Set-Content "$asset.sha256"
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7
         with:
-          name: DS5DongleTray-${{ env.RELEASE_TAG }}-win-x64
+          name: DS5DongleTray-${{ env.RELEASE_TAG }}-${{ matrix.flavor }}-win-x64
           path: artifacts/*
           if-no-files-found: error
 

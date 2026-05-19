@@ -53,3 +53,5 @@ uint8_t controller_mode;         // 0: DS5, 1: DSE, 2: Auto
 ```
 
 To apply config immediately, send `0xF6` with payload byte `0x01` followed by the packed config body. To persist the current config to flash, send `0xF6` with payload byte `0x02`. To reconnect USB, send `0xF6` with payload byte `0x03`.
+
+The custom firmware build flavor can also use `0xF6 + 0x04` to enter UF2 bootloader mode. This is not part of the upstream/original firmware path.
